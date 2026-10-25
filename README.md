@@ -1,49 +1,71 @@
 # bb-inventory-order-mod
 
-A patch for Bloodborne (running on PC via [shadPS4](https://github.com/shadps4-emu/shadPS4)) that gives weapons a **fixed, stable order in the inventory menu**.
+A [bbhost](https://github.com/droogie/bbhost) plugin for Bloodborne on PC that gives copies of the same weapon a **predictable order in the inventory and equipment menus**, based on their blood gem loadout.
 
 ## The problem
 
-At meta level (BL120, everything +10), you end up carrying several copies of the same weapon with different blood gem loadouts. Every time the game restarts, those copies come back in a different order in the inventory/equipment menu, so you have to check gems to find the one you want.
+At meta level (BL120, everything +10) you carry several copies of the same weapon with different gem loadouts. They show up in an order that changes over time, so you have to inspect gems to find the one you want.
 
-## Why it needs an executable patch
+## What the save data shows
 
-All copies of a weapon share one `EquipParamWeapon` row, and so one sort key. Gems and upgrade level belong to each copy and live in the save, not in the params. When the menu sorts, the copies tie on the param sort key, and the tie is broken by something that isn't stable across launches (probably a runtime item handle or a pool-assigned slot; this still needs confirming).
+Details and evidence are in [`docs/findings.md`](docs/findings.md).
 
-No param edit can tell two Saw Cleavers apart, so the fix has to change the comparison in `eboot.bin`: keep the existing sort and add a final, deterministic tie-breaker.
+- All copies of a weapon share one `EquipParamWeapon` row, so they tie on the param sort ID.
+- **Ties are broken by GaItem handle order, not inventory slot order.** The GaItem is the per-copy record holding durability and gems. Handles are renumbered on every save, and their order follows the position of the GaItem blocks.
+- GaItem pool positions are reused first-free. Storage trips, pickups, gem swaps and chalice loot can all move a copy ahead of or behind its twins. The player has no reliable way to control the order (unconfirmed, but consistent with every sample so far).
 
-## Plan
+No param edit can tell two Saw Cleavers apart, so the fix has to be in code: keep the game's sort and replace its tie-breaker.
 
-0. **Find which layer shuffles.** Save and quit, copy the save, restart, note the menu order, quit without changes, copy the save again, and diff the inventory region.
-   - Save order stable, menu order changes: the problem is the display sort.
-   - Save order changes: the game rewrites the inventory on load/save.
-1. **Data formats.** Unpack the params (DCX/BND4) and confirm the weapon variants share one sort ID. Note that field's offset in the param struct; it's the first search key in the binary.
-2. **Get a usable executable.** A decrypted ELF (`eboot.bin`) from game version **1.09**, the version the community patches target.
-3. **Static RE.** Load the ELF in Ghidra and find the inventory sort routine and its comparator (look for reads of the sort-ID offset, or work back from menu strings and FMG text IDs).
-4. **Dynamic RE.** Attach a debugger to shadPS4, set a memory-read breakpoint on the inventory array, open the weapons menu, and land in the sort and comparator. Work out the load base to map runtime addresses to Ghidra addresses.
-5. **Patch.** Add a tie-breaker to the comparator, using a code cave if it doesn't fit in place. Ship it as a shadPS4 / GoldHEN-style XML memory patch.
+## Approach: a bbhost plugin
 
-### Tie-breaker options
+bbhost runs the decrypted 1.09 `eboot.bin` natively on PC and exposes a C plugin API (`include/bbhost_plugin.h`): `hook`, `read`/`write`, `call_guest`, and option descriptors that appear in the in-game F9 plugin menu. That makes this possible without patching bbhost itself.
 
-| Option | Notes |
-|---|---|
-| Inventory slot index / acquisition order | Simple and deterministic. **Target for v1.** |
-| Hash of the gem configuration | Stable but arbitrary. |
-| User-defined order | Needs storage for the order. Deferred to v2. |
+The plugin will:
+
+1. Hook the inventory sort comparator.
+2. On a tie (same param sort ID), resolve each copy's GaItem from its handle and read its gems.
+3. Compare a gem-loadout key instead of the handle.
+4. Expose an option such as `Duplicate weapon order: game | gem loadout`.
+
+### Already mapped in bbhost
+
+- Equip param `sort_id` offsets: `include/bbhost/engine/param.hpp`
+- Inventory layout and add/lookup functions: `plugins/boss_rush/boss_rush.cpp`
+- GaItem reference functions: `include/bbhost/engine/sprj/game_data_man.hpp`
+- `FrpgMenuDlgInventory` / `FrpgMenuDlgEquip` classes and the inventory list update (`sub_1f108c0`): `include/bbhost/engine/symbols.hpp`, `src/engine/menu_pointer.cpp`
+
+### Still to find
+
+- The sort routine and its comparator. Start from the inventory list update and step in with x64dbg attached to `bbhost.exe`.
+
+### Later
+
+- Gem-loadout classification: decide what counts as a "group of gems" and build the sort key from it.
+- Optionally, upstream the option into bbhost's own PC Enhancements menu (`src/engine/option_menu.cpp`).
 
 ## Repo layout
 
 ```
-docs/       research notes: structures, offsets, findings
-patches/    shadPS4 XML patch(es)
-tools/      helper scripts (save diffing, address conversion, ...)
+docs/       research notes: findings, structures, offsets
+tools/      helper scripts (inv_dump.py: dump weapons, handles and gems from a save)
+patches/    reserved; the plugin source will likely replace this
 ```
+
+### tools/inv_dump.py
+
+```bash
+export BB_WEAPONS_JSON=~/Bloodborne-save-editor/src-tauri/resources/weapons.json  # optional, for names
+python3 -I tools/inv_dump.py saves/userdata0002_*
+```
+
+The save layout comes from [Noxde/Bloodborne-save-editor](https://github.com/Noxde/Bloodborne-save-editor).
 
 ## Not in this repo
 
-Game files, the executable, saves and Ghidra project databases are **gitignored** and must never be committed. Bring your own legally dumped copy of the game.
+Game files, the executable, saves, screenshots and RE databases are **gitignored** and must never be committed. Bring your own legally dumped copy of the game.
 
 ## Target
 
-- Game: Bloodborne (CUSA00900 / CUSA03173 etc.), version 1.09
-- Runtime: shadPS4 on Windows 11
+- Game: Bloodborne 1.09 (the eboot SHA-256 that bbhost enforces)
+- Runtime: bbhost on Windows 11
+- Tools: x64dbg, Ghidra or Binary Ninja (bbhost addresses use base `0x400000`), a C/C++ toolchain, ImHex
