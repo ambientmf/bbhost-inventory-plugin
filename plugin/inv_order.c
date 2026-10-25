@@ -115,8 +115,9 @@ static void classify(int kind, int* type, int* order_in_type) {
     *order_in_type = kind < 0 ? 99 : kind;
 }
 
-/* Curses, worst first (configurable: curse_order). A weapon is judged by
- * its worst curse; no curse ranks best. */
+/* Curses, worst first internally (configured best first: curse_order). A
+ * weapon is judged by its worst curse and sits lower the worse it is; no
+ * curse ranks best. */
 #define CURSE_KINDS 6
 static int curse_kinds[CURSE_KINDS] = {28, 44, 47, 34, 36, 41}; /* ATK DOWN, HP drain, dur DOWN, beasts, kin, stamina */
 static const char* const curse_names[CURSE_KINDS] = {"atk", "hp", "durability", "beasts", "kin", "stamina"};
@@ -281,7 +282,8 @@ static void parse_type_order(const char* v) {
         if (!seen[t]) type_rank[t] = next++;
 }
 
-/* "atk,hp,durability,beasts,kin,stamina" (worst first) -> curse_kinds. */
+/* "stamina,kin,beasts,durability,hp,atk": best first, as the menu reads (a
+ * weapon with a worse curse sits lower) -> curse_kinds, which is worst first. */
 static void parse_curse_order(const char* v) {
     int kinds[CURSE_KINDS], n = 0;
     for (const char* p = v ? v : ""; *p && n < CURSE_KINDS;) {
@@ -296,7 +298,7 @@ static void parse_curse_order(const char* v) {
         p += len;
     }
     if (n != CURSE_KINDS) return; /* incomplete: keep the default */
-    memcpy(curse_kinds, kinds, sizeof(kinds));
+    for (int i = 0; i < CURSE_KINDS; ++i) curse_kinds[i] = kinds[CURSE_KINDS - 1 - i];
 }
 
 static int on_sort_pass(BbHookCtx* ctx, void* user) {
@@ -410,8 +412,9 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Setup type order",
      "comma list of heavy, physical, arcane, blood, status, special, misc", "heavy,physical,arcane,blood,status,special,misc",
      0, 0, 0},
-    {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, worst first",
-     "comma list of atk, hp, durability, beasts, kin, stamina", "atk,hp,durability,beasts,kin,stamina", 0, 0, 0},
+    {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, best first",
+     "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk",
+     "stamina,kin,beasts,durability,hp,atk", 0, 0, 0},
     {BB_OPT_BOOL, "export_gems", "Export the gem effect table", "writes plugins/inv_order/gem_effects.csv once at start",
      "false", 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
