@@ -34,8 +34,8 @@ Within a group of identical weapons, cluster copies whose gems are the same *kin
 | **Specialized** | Poorman's (Physical ATK UP 30%+ at low HP), Fool's (Physical ATK UP at full HP) |
 
 - Gem classes come with different natural curses, so grouping must use the **type of the primary effect**, not the full effect list or its values.
-- **Pulsing** is a matter of taste: some players want it at the top regardless of category, others at the bottom. The `pulsing` preset puts it first.
-- **Presets:** the F9 menu offers `default`, `arcane` (arcane, nourishing, blood first) and `pulsing`, plus `custom`, which reads the `type_order` list from `bbhost.toml`. Unknown or repeated names in a list are skipped and logged; unlisted types follow in default order. New presets come from what players ask for.
+- **Pulsing** is a matter of taste: some players want it at the top regardless of category, others at the bottom. The `pulsing+default` preset puts it first.
+- **Presets:** the F9 menu offers `default`, `arcane` (arcane, nourishing, blood first) and `pulsing+default`, plus `custom`, which reads the `type_order` list from `bbhost.toml`. Unknown or repeated names in a list are skipped and logged; unlisted types follow in default order. New presets come from what players ask for.
 - **Variants are separate groups.** A Lost or Uncanny copy has its own item id, so the game groups it apart from the normal copies (userdata0007: two Blades of Mercy, then the Lost Blade of Mercy below them).
 
 ### 3. Within a setup type: curses rank lower

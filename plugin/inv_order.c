@@ -117,7 +117,7 @@ static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}; /* configurab
 static const char* const type_presets[][2] = {
     {"default", "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,special,misc"},
     {"arcane", "arcane,nourishing,blood,adept,heavy,physical,status,pulsing,special,misc"},
-    {"pulsing", "pulsing,adept,heavy,physical,nourishing,arcane,blood,status,special,misc"},
+    {"pulsing+default", "pulsing,adept,heavy,physical,nourishing,arcane,blood,status,special,misc"},
 };
 #define TYPE_PRESETS (sizeof(type_presets) / sizeof(type_presets[0]))
 static char preset[32] = "default";
@@ -473,8 +473,8 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
      0},
     {BB_OPT_CHOICE | BB_OPT_LIVE, "preset", "Setup order",
      "default: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, special. arcane: arcane, "
-     "nourishing and blood first. pulsing: pulsing first. custom: the list below.",
-     "default", 0, 0, "default|arcane|pulsing|custom"},
+     "nourishing and blood first. pulsing+default: pulsing first, then default. custom: the list below.",
+     "default", 0, 0, "default|arcane|pulsing+default|custom"},
     {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Custom setup order",
      "used when Setup order is custom; top first: comma list of adept, heavy, physical, nourishing, arcane, blood, "
      "status, pulsing, special, misc. Unlisted types follow.",
