@@ -1,5 +1,47 @@
 # Findings
 
+## TL;DR (ELI5)
+
+Picture the weapon menu as a librarian shelving books:
+
+1. **Collect.** The game walks your inventory bag from top to bottom and pulls out every weapon. The bag's order is effectively random from your point of view: wherever an item happened to land.
+2. **Label.** On each weapon it writes a label with two numbers:
+   - **number 1**: whatever the current `[T] Sort` column is (normally the weapon type's built-in sort order, so all Church Picks get the same number);
+   - **number 2**: the weapon's **item handle**, an internal ID the game assigns to every individual item when the save loads.
+3. **Sort.** It sorts by number 1. If two labels have the same number 1 (say, three Church Picks), it uses number 2 to decide.
+4. **Shelve.** It shows the weapons in that order.
+
+So identical weapons are ordered by an internal ID you can't see or change. Gems, durability, storage trips and bag position don't matter.
+
+**The mod** quietly rewrites **number 2** just before step 3, using something meaningful instead (your gem loadout), so ties come out in an order you control. Nothing else about the menu changes.
+
+### Pseudocode
+
+```c
+// 0x2060530: the sort pass, run when the weapon list opens and on every [T] press
+void sort_weapon_list(List* list, int sort_mode, bool flip) {
+    Record recs[list->count];
+    for (int i = 0; i < list->count; i++) {
+        Entry* e     = &list->entries[i];              // 0xd8-byte menu entry
+        recs[i].key1 = stat_for_mode(e, sort_mode);    // 0x205e120: sort column value
+        recs[i].key2 = e->item_ref.handle;             // entry+0x70: the tie-breaker
+        recs[i].index = i;
+    }
+    if (sort_mode != 0)
+        stable_sort(recs, flip ? cmp_a : cmp_b);       // 0x2064dd0 / 0x2064ff0
+    rebuild_list_in_order(list, recs);
+}
+
+bool cmp(Record a, Record b) {                         // inlined in 0x2064dd0
+    if (a.key1 != b.key1) return a.key1 < b.key1;      // e.g. weapon type
+    return a.key2 < b.key2;                            // tie: lower handle first
+}
+
+// What the plugin does, just before stable_sort runs:
+for each record r:  r.key2 = my_tie_key(list->entries[r.index]);   // e.g. gem loadout
+```
+
+
 ## 2026-10-25: identical weapons are ordered by GaItem handle, not inventory slot
 
 Sources:
@@ -141,3 +183,52 @@ The order that holds is the GaItem table order. It seems fixed for each copy and
 
 - The comparator probably compares GaItem handles on ties. Look for a 32-bit handle compare (`0x8xxxxxxx` values, or the handle's low bits) after the param `sortId` compare.
 - Replacing that compare with a gem-loadout key is the plugin's job.
+
+## 2026-10-25 (round 5): the sort, found
+
+Found with a bbhost trace plugin, x64dbg logging breakpoints, memory dumps, and bounded static disassembly of the 1.09 eboot. Addresses are Binary Ninja addresses (image at 0x400000); at runtime under bbhost on Windows, add 0x2ffc00000.
+
+### How the weapon list is built
+
+| BN address | role |
+|---|---|
+| `0x206ffc0` | menu-side list builder: calls the item provider, filters, adds rows |
+| `0x2075fc0` | provider: walks the player's in-memory inventory (`PlayerGameData+0x380` / `+0x370`, count `+0x34c`), filters by tab, skips item 1000000 (Unarmed), and appends a 0xd8-byte entry per item |
+| `0x2060d70` | builds one entry from inventory index *i* |
+| `0x205d890` | entry constructor; stores the GaItem reference at **entry+0x70** via `0x1e8bb70` (GAITEM_REFERENCE_COPY_CONSTRUCT) |
+| `0x2060530` | **the sort pass** (below) |
+| `0x1fd7ed0` | per-row callback: only sets flag bits on the entry (equippable, etc.), no ordering |
+
+The in-memory inventory array is **not** in menu order. For example, the Church Picks sit at indices 97/103/179 but are shown 179, 97, 103. The sort pass is what reorders them.
+
+### The sort pass (`0x2060530`)
+
+For each entry *i*, it builds a 12-byte record:
+
+```
+key1  = stat value for the current sort mode  (0x205e120(entry, mode); floats truncated)
+key2  = *(uint32*)(entry + 0x70)              // the GaItem handle
+index = i
+```
+
+If the mode is non-zero, it stable-sorts the records with `0x2064dd0`, or `0x2064ff0` (picked by the flag at `[rbp-0x214]`, likely the direction), then rebuilds the list in record order.
+
+The comparison is inlined in `0x2064dd0` (merge sort; insertion sort for 32 records or fewer):
+
+```
+a < b  <=>  a.key1 < b.key1 (signed)  ||  (a.key1 == b.key1 && a.key2 < b.key2 (unsigned))
+```
+
+**Tie-break = GaItem handle.** This confirms H1 from the save experiments. Handles are numbered by GaItem table order at load, which is why the order survived storage trips, durability changes and gem swaps.
+
+### Hook points for the plugin
+
+- `0x205e120` (entry, `rsi` = entry): runs once per entry just before its record is packed. A place to compute and cache a gem-loadout key per entry.
+- `0x2064dd0` / `0x2064ff0` (`rdi`, `rsi` = record range): before the sort runs, overwrite each record's `key2` with the gem key for `record.index`. Only ties consult `key2`, so other ordering is unaffected.
+- `0x2060530`: the start of a sort pass. Reset per-pass state here.
+
+These are function entries, so bbhost's `hook2` can place them; prologues still need checking.
+
+### Corrections to earlier rounds
+
+- Round 1's "pool reuse reshuffles copies" and the stable-sort and heap-buffer guesses from the copy traces were wrong. The heap-to-heap copies were the list vector growing (`0x2065440`).
