@@ -1,46 +1,60 @@
 # Findings
 
-## TL;DR (ELI5)
+## Overview
 
-Picture the weapon menu as a librarian shelving books:
+### Background
 
-1. **Collect.** The game walks your inventory bag from top to bottom and pulls out every weapon. The bag's order is effectively random from your point of view: wherever an item happened to land.
-2. **Label.** On each weapon it writes a label with two numbers:
-   - **number 1**: whatever the current `[T] Sort` column is (normally the weapon type's built-in sort order, so all Church Picks get the same number);
-   - **number 2**: the weapon's **item handle**, an internal ID the game assigns to every individual item when the save loads.
-3. **Sort.** It sorts by number 1. If two labels have the same number 1 (say, three Church Picks), it uses number 2 to decide.
-4. **Shelve.** It shows the weapons in that order.
+- **Memory is one huge `byte[]`.** An address is just an index into it (`0x1001c36f0`). A pointer is a variable holding such an index. There's no GC or object header; a "struct" is a convention that "starting at index *p*, bytes 0-3 are an int, bytes 4-7 are another int…". Reading `entry + 0x70` means "read the 4 bytes at index `p + 112`".
+- **The game's code is in that same array.** Its functions start at fixed addresses (`0x2060530`, …), exactly like methods you could look up by name if they had names. We name them by address.
+- **Calling convention = how arguments are passed.** On x86-64 (SysV, which the PS4 uses) the first six integer or pointer arguments go in registers `rdi, rsi, rdx, rcx, r8, r9`, and the return value comes back in `rax`. So "at entry, `rdi` = first arg" is the assembly equivalent of reading `args[0]`.
+- **A hook is monkey-patching / an interceptor.** bbhost overwrites the first ~17 bytes of a game function with a jump to its own stub. The stub calls our C function with the argument registers, so it gets `ctx->arg[0..5]`. Then it runs the original bytes and continues into the real function. Think Express middleware, or a Java agent wrapping a method: we see and can change the inputs before the original runs.
+- **Mutating through a pointer is mutating the caller's data.** Like passing a Java array or a Python list: if the sort function receives a pointer to an array of records and we change `records[i].key2` before it runs, the sort sees our values.
 
-So identical weapons are ordered by an internal ID you can't see or change. Gems, durability, storage trips and bag position don't matter.
+### The sort, as pseudocode
 
-**The mod** quietly rewrites **number 2** just before step 3, using something meaningful instead (your gem loadout), so ties come out in an order you control. Nothing else about the menu changes.
+```java
+// Roughly what 0x2060530 does, in Java terms.
+record SortRecord(int key1, int key2, int index) {}       // 12 bytes in memory
 
-### Pseudocode
-
-```c
-// 0x2060530: the sort pass, run when the weapon list opens and on every [T] press
-void sort_weapon_list(List* list, int sort_mode, bool flip) {
-    Record recs[list->count];
-    for (int i = 0; i < list->count; i++) {
-        Entry* e     = &list->entries[i];              // 0xd8-byte menu entry
-        recs[i].key1 = stat_for_mode(e, sort_mode);    // 0x205e120: sort column value
-        recs[i].key2 = e->item_ref.handle;             // entry+0x70: the tie-breaker
-        recs[i].index = i;
+void sortWeaponList(List<MenuEntry> entries, int sortMode) {   // MenuEntry = 216-byte (0xd8) struct
+    var records = new ArrayList<SortRecord>();
+    for (int i = 0; i < entries.size(); i++) {
+        MenuEntry e = entries.get(i);
+        records.add(new SortRecord(
+            statForMode(e, sortMode),   // 0x205e120: the [T] column's value (weapon type order, attack, ...)
+            e.itemHandle,               // read from entry+0x70
+            i));
     }
-    if (sort_mode != 0)
-        stable_sort(recs, flip ? cmp_a : cmp_b);       // 0x2064dd0 / 0x2064ff0
-    rebuild_list_in_order(list, recs);
+    if (sortMode != 0) {
+        // 0x2064dd0 / 0x2064ff0: a stable merge sort (like Java's Collections.sort / List.sort)
+        records.sort(Comparator.comparingInt(SortRecord::key1)
+                               .thenComparingInt(SortRecord::key2));   // key2 compared unsigned
+    }
+    rebuildListInOrder(entries, records);   // copy entries into a new list in record order
 }
-
-bool cmp(Record a, Record b) {                         // inlined in 0x2064dd0
-    if (a.key1 != b.key1) return a.key1 < b.key1;      // e.g. weapon type
-    return a.key2 < b.key2;                            // tie: lower handle first
-}
-
-// What the plugin does, just before stable_sort runs:
-for each record r:  r.key2 = my_tie_key(list->entries[r.index]);   // e.g. gem loadout
 ```
 
+- `key1` is the same for every copy of a weapon (three Church Picks have the same type and sort value).
+- So `thenComparingInt(key2)` decides their order, and `key2` is the **item handle**: an ID the game assigns to each individual item when the save loads, in the order those items sit in an internal table. You can't see or change it in game, which is why gems, durability and storage trips never affected the order.
+
+### What the plugin does
+
+```java
+// Intercepts 0x2064dd0/0x2064ff0 just before they run (first call of each pass only;
+// the merge sort calls itself recursively on halves, and those calls are ignored).
+void beforeSort(SortRecord[] records) {          // really: a pointer to the first record, and one to the end
+    for (var r : records)
+        r.key2 = myTieKey(r.key2);               // in C: first[i].key2 = tie_key(first[i].key2);
+}
+// today:  myTieKey = h -> ~h            ("reverse": proves the hook controls the order)
+// next:   myTieKey = h -> gemKey(h)     (look up that item's gems, rank the loadout)
+```
+
+Because only `key2` changes, weapons of different types sort exactly as before. Only copies of the same weapon are reordered.
+
+### Why it took so long to find
+
+The obvious approach, catching whatever copies the 216-byte entries during the sort, found nothing. The game sorts the small 12-byte records, not the entries, and only rebuilds the entry list afterwards. The detours (save diffs, call traces, a debugger, memory dumps) are logged below as rounds 1-5.
 
 ## 2026-10-25: identical weapons are ordered by GaItem handle, not inventory slot
 
