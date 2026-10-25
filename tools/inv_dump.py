@@ -27,7 +27,7 @@ def find_offsets(b):
 
 
 def ga_blocks(b, end):
-    """Map 8-byte (handle, id) key -> (offset, gem ids) for 60-byte GaItem blocks."""
+    """Map 8-byte (handle, id) key -> (offset, durability, gem ids) for 60-byte GaItem blocks."""
     out = {}
     i = 0
     while i < end - 60:
@@ -36,7 +36,8 @@ def ga_blocks(b, end):
             handle = struct.unpack_from("<I", b, i)[0]
             if handle and handle >> 28 in (0x8, 0x9):
                 gems = [struct.unpack_from("<I", b, v + 4)[0] for v in range(i + 20, i + 60, 8)]
-                out.setdefault(key, (i, gems))
+                dur = struct.unpack_from("<I", b, i + 8)[0]
+                out.setdefault(key, (i, dur, gems))
         i += 4
     return out
 
@@ -72,10 +73,10 @@ def main():
         print(f"== {path}  inv@{inv:#x} storage@{sto:#x}")
         for label, start in (("INV", inv), ("STO", sto)):
             for n, o, idx, handle, item, amount, key in entries(b, start):
-                ga_off, gems = ga.get(key, (None, []))
+                ga_off, dur, gems = ga.get(key, (None, None, []))
                 g = " ".join(f"{x:08x}" for x in gems if x)
                 print(f"{label} slot={n:4d} @{o:#07x} idx={idx:#010x} handle={handle:#010x} "
-                      f"item={item} {name_of(names, item)!r} ga={ga_off and hex(ga_off)} gems=[{g}]")
+                      f"item={item} {name_of(names, item)!r} ga={ga_off and hex(ga_off)} dur={dur} gems=[{g}]")
 
 
 if __name__ == "__main__":
