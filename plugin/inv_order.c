@@ -22,8 +22,8 @@
 #include <string.h>
 
 #define FN_SORT_PASS 0x2060530ull /* builds the records and sorts them */
-#define FN_SORT_A 0x2064dd0ull    /* stable sort of the records, one direction */
-#define FN_SORT_B 0x2064ff0ull    /* ... the other */
+#define FN_SORT_A 0x2064dd0ull    /* stable sort of the records: key1, key2 ascending */
+#define FN_SORT_B 0x2064ff0ull    /* ... descending, both keys */
 #define GAITEM_MAN 0x593e990ull   /* global: the GaItem manager; items[slot] at +8 */
 
 /* GaItem layouts (docs/findings.md, round 6). */
@@ -104,7 +104,7 @@ static int by_tie(const void* a, const void* b) {
 /* gems: rank every record by (signature, handle) and make the rank its key2.
  * Only ties on key1 ever compare key2, so this orders copies of a weapon by
  * their gems and leaves everything else as the game has it. */
-static void rank_by_gems(Record* r, size_t n) {
+static void rank_by_gems(Record* r, size_t n, int descending) {
     for (size_t i = 0; i < n; ++i) {
         tie[i].handle = r[i].key2;
         tie[i].record = (uint32_t)i;
@@ -112,7 +112,10 @@ static void rank_by_gems(Record* r, size_t n) {
         order[i] = (uint32_t)i;
     }
     qsort(order, n, sizeof(order[0]), by_tie);
-    for (size_t rank = 0; rank < n; ++rank) r[order[rank]].key2 = (uint32_t)rank;
+    /* The descending sort compares key2 descending too: hand it the ranks
+     * inverted, so a loadout keeps its place whichever way the list runs. */
+    for (size_t rank = 0; rank < n; ++rank)
+        r[order[rank]].key2 = (uint32_t)(descending ? n - 1 - rank : rank);
 }
 
 static void dump_pass(const Record* r, size_t n) {
@@ -142,7 +145,7 @@ static int on_sort_pass(BbHookCtx* ctx, void* user) {
 }
 
 static int on_sort(BbHookCtx* ctx, void* user) {
-    (void)user;
+    const int descending = user != NULL; /* FN_SORT_B */
     if (!armed) return 0; /* a recursive call, or a sort outside a menu pass */
     armed = 0;
     Record* first = (Record*)(uintptr_t)ctx->arg[0];
@@ -151,7 +154,7 @@ static int on_sort(BbHookCtx* ctx, void* user) {
     const size_t n = (size_t)(last - first);
     switch (ties) {
     case TIES_GEMS:
-        rank_by_gems(first, n);
+        rank_by_gems(first, n, descending);
         break;
     case TIES_REVERSE:
         for (size_t i = 0; i < n; ++i) first[i].key2 = ~first[i].key2;
@@ -176,8 +179,8 @@ static void on_option(const char* key, const char* value, void* user) {
     if (out) fprintf(out, "option %s = %s\n", key, value ? value : "");
 }
 
-static int place(uint64_t at, size_t n, BbHookFn2 fn, const char* what) {
-    const int rc = api->hook2(at, NULL, n, fn, NULL);
+static int place(uint64_t at, size_t n, BbHookFn2 fn, void* user, const char* what) {
+    const int rc = api->hook2(at, NULL, n, fn, user);
     api->log("inv_order: hook %s at %#llx: %s", what, (unsigned long long)at,
              rc == 0 ? "ok" : rc == 1 ? "prologue differs" : "cannot place");
     return rc;
@@ -206,9 +209,9 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */
-    if (place(FN_SORT_PASS, 20, on_sort_pass, "sort pass") != 0) return 1;
-    if (place(FN_SORT_A, 17, on_sort, "sort a") != 0) return 1;
-    if (place(FN_SORT_B, 17, on_sort, "sort b") != 0) return 1;
+    if (place(FN_SORT_PASS, 20, on_sort_pass, NULL, "sort pass") != 0) return 1;
+    if (place(FN_SORT_A, 17, on_sort, NULL, "sort ascending") != 0) return 1;
+    if (place(FN_SORT_B, 17, on_sort, (void*)1, "sort descending") != 0) return 1;
     api->on_option("inv_order", on_option, NULL);
     if (out) fflush(out);
     return 0;
