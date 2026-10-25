@@ -7,8 +7,11 @@
  * then key2. key2 only matters when key1 ties: copies of the same weapon.
  * This plugin rewrites key2 just before the sort runs.
  *
- *   ties = "gems"     copies ordered fully gemmed first, then by gem count,
- *                     then by gem loadout, then by handle
+ *   ties = "gems"     copies ordered by gem setup (docs/sort-design.md):
+ *                     fully gemmed, gem count, setup type of slot 1,
+ *                     primary kind, worst curse, flat secondaries,
+ *                     strength, then the handle
+ *   type_order, curse_order   the setup type and curse rankings
  *          "game"     the game's order (lowest handle first)
  *          "reverse"  ties reversed - a visible check that the hooks work
  *   dump = true       log each sort pass's weapons and gems
@@ -21,6 +24,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "gem_values.h"
 
 #define FN_SORT_PASS 0x2060530ull /* builds the records and sorts them */
 #define FN_SORT_A 0x2064dd0ull    /* stable sort of the records: key1, key2 ascending */
@@ -59,12 +64,82 @@ static int dump;
 static int armed;
 static uint64_t pass;
 
-/* One record's tie key in gems mode, compared field by field: fully gemmed
- * first, then more gems first, then the gem signature, then the handle. */
+/* Gem effects (docs/sort-design.md). An effect id encodes its kind as
+ * (id / 1000) % 100; high-tier prefixes are aliases of the base kinds. */
+static int effect_kind(uint32_t id) {
+    static const struct { int from, to; } alias[] = {{56, 43}, {62, 17}, {63, 24}, {64, 25}, {65, 26}, {66, 26},
+                                                     {67, 26}, {68, 29}, {69, 30}, {70, 33}, {71, 34}, {72, 35},
+                                                     {73, 36}, {74, 37}, {75, 38}, {76, 49}};
+    const int k = (int)((id / 1000) % 100);
+    if (k >= 13 && k <= 52) return k;
+    for (size_t i = 0; i < sizeof(alias) / sizeof(alias[0]); ++i)
+        if (alias[i].from == k) return alias[i].to;
+    return -1;
+}
+
+/* |value| x 100 of an effect, from gem_values.h; 0 when unknown. */
+static uint32_t effect_value(uint32_t id) {
+    size_t lo = 0, hi = GEM_VALUES_COUNT;
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        if (gem_values[mid].id < id) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < GEM_VALUES_COUNT && gem_values[lo].id == id ? gem_values[lo].value : 0;
+}
+
+/* Setup types, in default order, and the primary kinds that make each one;
+ * within a type, primaries sort in the order listed. */
+enum { TYPE_HEAVY, TYPE_PHYSICAL, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT };
+static const char* const type_names[TYPE_COUNT] = {"heavy", "physical", "arcane", "blood", "status", "special", "misc"};
+static const int type_kinds[TYPE_COUNT][8] = {
+    {29, 30, -1},                     /* heavy: STR / SKL scaling (Heavy / Sharp abyssal) */
+    {26, 27, 20, 21, 17, -1},         /* physical: phys %, ATK %, blunt %, thrust %, add physical */
+    {32, 23, 24, 25, 14, 15, 16, -1}, /* arcane: ARC scaling, arcane / fire / bolt %, adds */
+    {31, 22, 13, -1},                 /* blood: BT scaling, blood %, add blood */
+    {38, 37, -1},                     /* status: rapid poison (Dirty), slow poison (Murky) */
+    {43, 49, 52, 48, 51, -1},         /* special: Pulsing, Poorman's, Fool's */
+    {-1},                             /* misc: anything else */
+};
+static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6}; /* configurable: type_order */
+
+static void classify(int kind, int* type, int* order_in_type) {
+    for (int t = 0; t < TYPE_COUNT; ++t)
+        for (int i = 0; type_kinds[t][i] >= 0; ++i)
+            if (type_kinds[t][i] == kind) {
+                *type = t;
+                *order_in_type = i;
+                return;
+            }
+    *type = TYPE_MISC;
+    *order_in_type = kind < 0 ? 99 : kind;
+}
+
+/* Curses, worst first (configurable: curse_order). A weapon is judged by
+ * its worst curse; no curse ranks best. */
+#define CURSE_KINDS 6
+static int curse_kinds[CURSE_KINDS] = {28, 44, 47, 34, 36, 41}; /* ATK DOWN, HP drain, dur DOWN, beasts, kin, stamina */
+static const char* const curse_names[CURSE_KINDS] = {"atk", "hp", "durability", "beasts", "kin", "stamina"};
+static const int curse_name_kinds[CURSE_KINDS] = {28, 44, 47, 34, 36, 41};
+
+static int curse_rank(int kind) {
+    for (int i = 0; i < CURSE_KINDS; ++i)
+        if (curse_kinds[i] == kind) return i;
+    return -1;
+}
+
+static int is_flat_damage(int kind) { return kind >= 13 && kind <= 17; }
+
+/* One record's tie key in gems mode, compared in this order. */
 typedef struct Tie {
-    uint32_t not_full; /* 0 when every open slot holds a gem */
-    uint32_t empty;    /* NUM_SLOTS - gems: fewer empty slots first */
-    uint32_t sig[SIG_LEN];
+    uint32_t not_full;          /* 0 when every open slot holds a gem */
+    uint32_t empty;             /* NUM_SLOTS - gems: fewer empty slots first */
+    uint32_t type;              /* setup type's rank, from slot 1 (the first filled slot) */
+    uint32_t primary;           /* the defining gem's primary kind, within its type */
+    uint32_t curse;             /* CURSE_KINDS - rank of the worst curse: lower is milder */
+    uint32_t flats;             /* flat-damage secondaries: more first */
+    uint32_t strength[NUM_SLOTS]; /* each slot's primary value: higher first */
+    uint32_t sig[SIG_LEN];      /* raw effect ids: a last, stable distinction */
     uint32_t handle;
     uint32_t record;
 } Tie;
@@ -84,17 +159,22 @@ static uint64_t gaitem(uint32_t handle) {
     return item;
 }
 
-/* A weapon's gem loadout: how many open slots hold gems, and their effect
- * ids slot by slot. An empty slot (or not a weapon) reads as all
- * 0xffffffff, which sorts after any gem; a non-weapon counts as not full. */
-static void gem_signature(uint32_t handle, Tie* t) {
+/* Reads a weapon's gems and fills in its tie key. A non-weapon, or one whose
+ * GaItem can't be read, gets the key of an empty weapon. */
+static void gem_tie(uint32_t handle, Tie* t) {
     memset(t->sig, 0xff, sizeof(t->sig));
+    memset(t->strength, 0, sizeof(t->strength));
     t->not_full = 1;
     t->empty = NUM_SLOTS;
+    t->type = TYPE_COUNT;
+    t->primary = 99;
+    t->curse = 0;
+    t->flats = 0;
     if (handle >> 28 != 0x8) return; /* weapons only */
     const uint64_t weapon = gaitem(handle);
     if (!weapon) return;
     uint32_t open = 0, gems = 0;
+    int defining = -1, worst = CURSE_KINDS;
     for (int s = 0; s < NUM_SLOTS; ++s) {
         const uint64_t slot = weapon + WEAPON_SLOTS + s * SLOT_STRIDE;
         uint32_t shape = SLOT_LOCKED, gem_handle = 0;
@@ -102,32 +182,55 @@ static void gem_signature(uint32_t handle, Tie* t) {
         ++open;
         if (api->read(slot + SLOT_GEM, &gem_handle, 4) != 0) continue;
         const uint64_t gem = gem_handle ? gaitem(gem_handle) : 0;
-        if (!gem) continue;
+        uint32_t* fx = &t->sig[s * NUM_EFFECTS];
+        if (!gem || api->read(gem + GEM_EFFECTS, fx, NUM_EFFECTS * sizeof(uint32_t)) != 0 || fx[0] == 0xffffffff)
+            continue;
         ++gems;
-        api->read(gem + GEM_EFFECTS, &t->sig[s * NUM_EFFECTS], NUM_EFFECTS * sizeof(uint32_t));
+        if (defining < 0) defining = s;
+        t->strength[s] = effect_value(fx[0]);
+        for (int e = 0; e < NUM_EFFECTS && fx[e] != 0xffffffff; ++e) {
+            const int k = effect_kind(fx[e]);
+            const int c = curse_rank(k);
+            if (c >= 0 && c < worst) worst = c;
+            if (e > 0 && is_flat_damage(k)) ++t->flats;
+        }
     }
     t->not_full = !(open && gems == open);
     t->empty = NUM_SLOTS - gems;
+    t->curse = (uint32_t)(CURSE_KINDS - worst);
+    if (defining >= 0) {
+        int type, in_type;
+        classify(effect_kind(t->sig[defining * NUM_EFFECTS]), &type, &in_type);
+        t->type = (uint32_t)type_rank[type];
+        t->primary = (uint32_t)in_type;
+    }
 }
 
+#define CMP(a, b) \
+    if ((a) != (b)) return (a) < (b) ? -1 : 1
 static int by_tie(const void* a, const void* b) {
     const Tie* x = &tie[*(const uint32_t*)a];
     const Tie* y = &tie[*(const uint32_t*)b];
-    if (x->not_full != y->not_full) return x->not_full < y->not_full ? -1 : 1;
-    if (x->empty != y->empty) return x->empty < y->empty ? -1 : 1;
-    for (int i = 0; i < SIG_LEN; ++i)
-        if (x->sig[i] != y->sig[i]) return x->sig[i] < y->sig[i] ? -1 : 1;
-    return x->handle < y->handle ? -1 : x->handle > y->handle;
+    CMP(x->not_full, y->not_full);
+    CMP(x->empty, y->empty);
+    CMP(x->type, y->type);
+    CMP(x->primary, y->primary);
+    CMP(x->curse, y->curse);
+    CMP(y->flats, x->flats); /* more first */
+    for (int s = 0; s < NUM_SLOTS; ++s) CMP(y->strength[s], x->strength[s]); /* stronger first */
+    for (int i = 0; i < SIG_LEN; ++i) CMP(x->sig[i], y->sig[i]);
+    CMP(x->handle, y->handle);
+    return 0;
 }
 
-/* gems: rank every record by (signature, handle) and make the rank its key2.
- * Only ties on key1 ever compare key2, so this orders copies of a weapon by
+/* gems: rank every record by its tie key and make the rank its key2. Only
+ * ties on key1 ever compare key2, so this orders copies of a weapon by
  * their gems and leaves everything else as the game has it. */
 static void rank_by_gems(Record* r, size_t n, int descending) {
     for (size_t i = 0; i < n; ++i) {
         tie[i].handle = r[i].key2;
         tie[i].record = (uint32_t)i;
-        gem_signature(r[i].key2, &tie[i]);
+        gem_tie(r[i].key2, &tie[i]);
         order[i] = (uint32_t)i;
     }
     qsort(order, n, sizeof(order[0]), by_tie);
@@ -140,19 +243,60 @@ static void rank_by_gems(Record* r, size_t n, int descending) {
 static void dump_pass(const Record* r, size_t n) {
     fprintf(out, "== pass %llu: %zu records, ties=%d\n", (unsigned long long)pass, n, ties);
     for (size_t i = 0; i < n; ++i) {
-        const uint32_t handle = ties == TIES_GEMS ? tie[i].handle : r[i].key2;
+        const Tie* t = &tie[i];
+        const uint32_t handle = ties == TIES_GEMS ? t->handle : r[i].key2;
         fprintf(out, "rec %zu key1=%d key2=%u handle=%08x", i, r[i].key1, r[i].key2, handle);
-        if (ties == TIES_GEMS && handle >> 28 == 0x8)
+        if (ties == TIES_GEMS && handle >> 28 == 0x8) {
+            fprintf(out, " full=%u gems=%u type=%u primary=%u curse=%u flats=%u str=", !t->not_full,
+                    NUM_SLOTS - t->empty, t->type, t->primary, t->curse, t->flats);
+            for (int s = 0; s < NUM_SLOTS; ++s) fprintf(out, "%s%u", s ? "/" : "", t->strength[s]);
             for (int s = 0; s < NUM_SLOTS; ++s) {
-                if (tie[i].sig[s * NUM_EFFECTS] == 0xffffffff) continue;
+                if (t->sig[s * NUM_EFFECTS] == 0xffffffff) continue;
                 fprintf(out, " [");
-                for (int e = 0; e < NUM_EFFECTS && tie[i].sig[s * NUM_EFFECTS + e] != 0xffffffff; ++e)
-                    fprintf(out, "%s%u", e ? " " : "", tie[i].sig[s * NUM_EFFECTS + e]);
+                for (int e = 0; e < NUM_EFFECTS && t->sig[s * NUM_EFFECTS + e] != 0xffffffff; ++e)
+                    fprintf(out, "%s%u", e ? " " : "", t->sig[s * NUM_EFFECTS + e]);
                 fprintf(out, "]");
             }
+        }
         fputc('\n', out);
     }
     fflush(out);
+}
+
+/* "heavy,physical,arcane,..." -> type_rank; unnamed types keep their order
+ * after the named ones. */
+static void parse_type_order(const char* v) {
+    int next = 0, seen[TYPE_COUNT] = {0};
+    for (const char* p = v ? v : ""; *p;) {
+        while (*p == ',' || *p == ' ') ++p;
+        size_t len = strcspn(p, ", ");
+        for (int t = 0; t < TYPE_COUNT; ++t)
+            if (len && strlen(type_names[t]) == len && strncmp(p, type_names[t], len) == 0 && !seen[t]) {
+                type_rank[t] = next++;
+                seen[t] = 1;
+            }
+        p += len;
+    }
+    for (int t = 0; t < TYPE_COUNT; ++t)
+        if (!seen[t]) type_rank[t] = next++;
+}
+
+/* "atk,hp,durability,beasts,kin,stamina" (worst first) -> curse_kinds. */
+static void parse_curse_order(const char* v) {
+    int kinds[CURSE_KINDS], n = 0;
+    for (const char* p = v ? v : ""; *p && n < CURSE_KINDS;) {
+        while (*p == ',' || *p == ' ') ++p;
+        size_t len = strcspn(p, ", ");
+        for (int c = 0; c < CURSE_KINDS; ++c)
+            if (len && strlen(curse_names[c]) == len && strncmp(p, curse_names[c], len) == 0) {
+                int dup = 0;
+                for (int i = 0; i < n; ++i) dup |= kinds[i] == curse_name_kinds[c];
+                if (!dup) kinds[n++] = curse_name_kinds[c];
+            }
+        p += len;
+    }
+    if (n != CURSE_KINDS) return; /* incomplete: keep the default */
+    memcpy(curse_kinds, kinds, sizeof(kinds));
 }
 
 static int on_sort_pass(BbHookCtx* ctx, void* user) {
@@ -240,6 +384,8 @@ static void on_option(const char* key, const char* value, void* user) {
     (void)user;
     if (strcmp(key, "ties") == 0) ties = parse_ties(value);
     if (strcmp(key, "dump") == 0) dump = value && strcmp(value, "true") == 0;
+    if (strcmp(key, "type_order") == 0) parse_type_order(value);
+    if (strcmp(key, "curse_order") == 0) parse_curse_order(value);
     if (strcmp(key, "export_gems") == 0) export_pending = value && strcmp(value, "true") == 0;
     if (out) fprintf(out, "option %s = %s\n", key, value ? value : "");
 }
@@ -252,15 +398,20 @@ static int place(uint64_t at, size_t n, BbHookFn2 fn, void* user, const char* wh
 }
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {
-    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.3.0", "",
+    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.4.0", "",
     "Orders copies of the same weapon by their gem loadout in the inventory and equipment menus."};
 
 BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_CHOICE | BB_OPT_LIVE, "ties", "Order of identical weapons",
-     "gems: fully gemmed first, more gems first, then grouped by gems. game: as the game does. reverse: flipped (a test).", "gems", 0, 0,
+     "gems: by gem setup (fully gemmed, type of slot 1, curses, strength). game: as the game does. reverse: flipped (a test).", "gems", 0, 0,
      "gems|game|reverse"},
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
+    {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Setup type order",
+     "comma list of heavy, physical, arcane, blood, status, special, misc", "heavy,physical,arcane,blood,status,special,misc",
+     0, 0, 0},
+    {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, worst first",
+     "comma list of atk, hp, durability, beasts, kin, stamina", "atk,hp,durability,beasts,kin,stamina", 0, 0, 0},
     {BB_OPT_BOOL, "export_gems", "Export the gem effect table", "writes plugins/inv_order/gem_effects.csv once at start",
      "false", 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
@@ -274,6 +425,8 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     ties = parse_ties(api->config("inv_order.ties"));
     dump = strcmp(api->config("inv_order.dump"), "true") == 0;
     export_pending = strcmp(api->config("inv_order.export_gems"), "true") == 0;
+    parse_type_order(api->config("inv_order.type_order"));
+    parse_curse_order(api->config("inv_order.curse_order"));
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */
