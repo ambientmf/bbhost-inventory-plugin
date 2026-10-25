@@ -289,3 +289,11 @@ For each record of a sort pass, the plugin:
 2. Ranks every record by (signature, handle) and writes the rank into `key2`.
 
 Copies with the same loadout end up next to each other in a fixed order. The handle only breaks ties between copies with exactly the same gems.
+
+### Test results (v0.2.0 + the descending fix)
+
+- **Gem added to the 247 pick:** the order became 247, 248, 244. Slot 2 decides: the new gem's first effect id 121618 (Thrust ATK UP) is below 126619 (Physical ATK UP), and an empty slot sorts last. That is the intended rule, but raw effect-id order isn't meaningful to players.
+- **Sort direction flipped:** the tie order is unchanged (pass 9 handed the descending sort inverted ranks).
+- **`[T]` modes cycled, then F9 `ties = game`:** the handle order came back (248, 244, 247), live, without a reload.
+
+Next: a more meaningful default. Candidates are gem count first, then the weapon's attack rating, then user-defined effect-group priority.
