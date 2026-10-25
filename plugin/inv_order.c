@@ -7,10 +7,10 @@
  * then key2. key2 only matters when key1 ties: copies of the same weapon.
  * This plugin rewrites key2 just before the sort runs.
  *
- *   ties = "game"     the game's order (lowest handle first)
+ *   ties = "gems"     copies ordered by their gem loadout, then by handle
+ *          "game"     the game's order (lowest handle first)
  *          "reverse"  ties reversed - a visible check that the hooks work
- *   dump = true       log every list entry's bytes on each sort pass, for
- *                     finding where an entry keeps its gems
+ *   dump = true       log each sort pass's weapons and gems
  *
  * All addresses are Binary Ninja addresses of the 1.09 eboot (image base
  * 0x400000). */
@@ -18,16 +18,25 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define FN_SORT_PASS 0x2060530ull  /* builds the records and sorts them */
-#define FN_SORT_KEY 0x205e120ull   /* (out, entry, mode): key1 of one entry */
-#define FN_SORT_A 0x2064dd0ull     /* stable sort of the records, one direction */
-#define FN_SORT_B 0x2064ff0ull     /* ... the other */
+#define FN_SORT_PASS 0x2060530ull /* builds the records and sorts them */
+#define FN_SORT_A 0x2064dd0ull    /* stable sort of the records, one direction */
+#define FN_SORT_B 0x2064ff0ull    /* ... the other */
+#define GAITEM_MAN 0x593e990ull   /* global: the GaItem manager; items[slot] at +8 */
 
-#define ENTRY_SIZE 0xd8
-#define ENTRY_REF 0x70     /* entry: GaItem reference, handle first */
-#define MAX_ENTRIES 4096
+/* GaItem layouts (docs/findings.md, round 6). */
+#define GAITEM_HANDLE 0x08
+#define WEAPON_SLOTS 0x30   /* 5 gem slots, 16 bytes each */
+#define SLOT_STRIDE 0x10
+#define SLOT_GEM 0x0c       /* within a slot: the gem's handle, 0 when empty */
+#define GEM_EFFECTS 0x20    /* gem: up to 6 effect ids, 0xffffffff when unused */
+
+#define NUM_SLOTS 5
+#define NUM_EFFECTS 6
+#define SIG_LEN (NUM_SLOTS * NUM_EFFECTS)
+#define MAX_RECORDS 4096
 
 typedef struct Record {
     int32_t key1;
@@ -35,63 +44,101 @@ typedef struct Record {
     uint32_t index;
 } Record;
 
-enum { TIES_GAME, TIES_REVERSE };
+enum { TIES_GEMS, TIES_GAME, TIES_REVERSE };
 
 static const BbHostApi* api;
 static FILE* out;
-static int ties = TIES_GAME;
+static int ties = TIES_GEMS;
 static int dump;
 
-/* The current sort pass: armed by FN_SORT_PASS, spent by the first (top
- * level) sort call; the entries FN_SORT_KEY saw, in index order. */
+/* Armed by each sort pass, spent by its first (top level) sort call: the
+ * merge sort calls itself on halves, and those calls are left alone. */
 static int armed;
 static uint64_t pass;
-static const uint8_t* entries[MAX_ENTRIES];
-static uint32_t entry_count;
 
-static uint32_t tie_key(uint32_t handle) {
-    switch (ties) {
-    case TIES_REVERSE:
-        return ~handle;
-    default:
-        return handle;
+/* One record's tie key in gems mode: its gem signature, then its handle. */
+typedef struct Tie {
+    uint32_t sig[SIG_LEN];
+    uint32_t handle;
+    uint32_t record;
+} Tie;
+static Tie tie[MAX_RECORDS];
+static uint32_t order[MAX_RECORDS];
+
+/* The GaItem a handle names, as the game resolves it (0x1e89070): slot =
+ * the handle's low 16 bits, and the item must carry the same handle. */
+static uint64_t gaitem(uint32_t handle) {
+    uint64_t man = 0, item = 0;
+    uint32_t have = 0;
+    const uint32_t slot = handle & 0xffff;
+    if (!(handle & 0x800000) || slot == 0xffff) return 0;
+    if (api->read(GAITEM_MAN, &man, 8) != 0 || !man) return 0;
+    if (api->read(man + 8 + (uint64_t)slot * 8, &item, 8) != 0 || !item) return 0;
+    if (api->read(item + GAITEM_HANDLE, &have, 4) != 0 || have != handle) return 0;
+    return item;
+}
+
+/* A weapon's gem loadout as effect ids, slot by slot; an empty slot (or not
+ * a weapon) reads as all 0xffffffff, which sorts after any gem. */
+static void gem_signature(uint32_t handle, uint32_t sig[SIG_LEN]) {
+    memset(sig, 0xff, SIG_LEN * sizeof(uint32_t));
+    if (handle >> 28 != 0x8) return; /* weapons only */
+    const uint64_t weapon = gaitem(handle);
+    if (!weapon) return;
+    for (int s = 0; s < NUM_SLOTS; ++s) {
+        uint32_t gem_handle = 0;
+        if (api->read(weapon + WEAPON_SLOTS + s * SLOT_STRIDE + SLOT_GEM, &gem_handle, 4) != 0) continue;
+        const uint64_t gem = gem_handle ? gaitem(gem_handle) : 0;
+        if (gem) api->read(gem + GEM_EFFECTS, &sig[s * NUM_EFFECTS], NUM_EFFECTS * sizeof(uint32_t));
     }
+}
+
+static int by_tie(const void* a, const void* b) {
+    const Tie* x = &tie[*(const uint32_t*)a];
+    const Tie* y = &tie[*(const uint32_t*)b];
+    for (int i = 0; i < SIG_LEN; ++i)
+        if (x->sig[i] != y->sig[i]) return x->sig[i] < y->sig[i] ? -1 : 1;
+    return x->handle < y->handle ? -1 : x->handle > y->handle;
+}
+
+/* gems: rank every record by (signature, handle) and make the rank its key2.
+ * Only ties on key1 ever compare key2, so this orders copies of a weapon by
+ * their gems and leaves everything else as the game has it. */
+static void rank_by_gems(Record* r, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        tie[i].handle = r[i].key2;
+        tie[i].record = (uint32_t)i;
+        gem_signature(r[i].key2, tie[i].sig);
+        order[i] = (uint32_t)i;
+    }
+    qsort(order, n, sizeof(order[0]), by_tie);
+    for (size_t rank = 0; rank < n; ++rank) r[order[rank]].key2 = (uint32_t)rank;
+}
+
+static void dump_pass(const Record* r, size_t n) {
+    fprintf(out, "== pass %llu: %zu records, ties=%d\n", (unsigned long long)pass, n, ties);
+    for (size_t i = 0; i < n; ++i) {
+        const uint32_t handle = ties == TIES_GEMS ? tie[i].handle : r[i].key2;
+        fprintf(out, "rec %zu key1=%d key2=%u handle=%08x", i, r[i].key1, r[i].key2, handle);
+        if (ties == TIES_GEMS && handle >> 28 == 0x8)
+            for (int s = 0; s < NUM_SLOTS; ++s) {
+                if (tie[i].sig[s * NUM_EFFECTS] == 0xffffffff) continue;
+                fprintf(out, " [");
+                for (int e = 0; e < NUM_EFFECTS && tie[i].sig[s * NUM_EFFECTS + e] != 0xffffffff; ++e)
+                    fprintf(out, "%s%u", e ? " " : "", tie[i].sig[s * NUM_EFFECTS + e]);
+                fprintf(out, "]");
+            }
+        fputc('\n', out);
+    }
+    fflush(out);
 }
 
 static int on_sort_pass(BbHookCtx* ctx, void* user) {
     (void)ctx;
     (void)user;
     armed = 1;
-    entry_count = 0;
     ++pass;
     return 0;
-}
-
-static int on_sort_key(BbHookCtx* ctx, void* user) {
-    (void)user;
-    if (!armed || !dump || entry_count >= MAX_ENTRIES) return 0;
-    const uint8_t* e = (const uint8_t*)(uintptr_t)ctx->arg[1];
-    /* Only the pass's own walk over its list: contiguous entries. */
-    if (entry_count && e != entries[0] + (size_t)entry_count * ENTRY_SIZE) return 0;
-    entries[entry_count++] = e;
-    return 0;
-}
-
-static void dump_pass(const Record* r, size_t n) {
-    fprintf(out, "== pass %llu: %zu records, %u entries\n", (unsigned long long)pass, n, entry_count);
-    for (size_t i = 0; i < n; ++i) {
-        const uint32_t idx = r[i].index;
-        fprintf(out, "rec %zu key1=%d key2=%08x index=%u\n", i, r[i].key1, r[i].key2, idx);
-        if (idx >= entry_count) continue;
-        const uint8_t* e = entries[idx];
-        uint32_t handle;
-        memcpy(&handle, e + ENTRY_REF, 4);
-        if (handle >> 28 != 0x8) continue; /* weapons only */
-        fprintf(out, "  entry");
-        for (int b = 0; b < ENTRY_SIZE; ++b) fprintf(out, "%s%02x", (b % 16) ? ((b % 4) ? "" : " ") : "\n   ", e[b]);
-        fputc('\n', out);
-    }
-    fflush(out);
 }
 
 static int on_sort(BbHookCtx* ctx, void* user) {
@@ -100,15 +147,27 @@ static int on_sort(BbHookCtx* ctx, void* user) {
     armed = 0;
     Record* first = (Record*)(uintptr_t)ctx->arg[0];
     Record* last = (Record*)(uintptr_t)ctx->arg[1];
-    if (!first || last <= first) return 0;
+    if (!first || last <= first || (size_t)(last - first) > MAX_RECORDS) return 0;
     const size_t n = (size_t)(last - first);
-    if (ties != TIES_GAME)
-        for (size_t i = 0; i < n; ++i) first[i].key2 = tie_key(first[i].key2);
+    switch (ties) {
+    case TIES_GEMS:
+        rank_by_gems(first, n);
+        break;
+    case TIES_REVERSE:
+        for (size_t i = 0; i < n; ++i) first[i].key2 = ~first[i].key2;
+        break;
+    default:
+        break;
+    }
     if (dump && out) dump_pass(first, n);
     return 0; /* the game's sort runs, with our keys */
 }
 
-static int parse_ties(const char* v) { return v && strcmp(v, "reverse") == 0 ? TIES_REVERSE : TIES_GAME; }
+static int parse_ties(const char* v) {
+    if (v && strcmp(v, "game") == 0) return TIES_GAME;
+    if (v && strcmp(v, "reverse") == 0) return TIES_REVERSE;
+    return TIES_GEMS;
+}
 
 static void on_option(const char* key, const char* value, void* user) {
     (void)user;
@@ -125,13 +184,14 @@ static int place(uint64_t at, size_t n, BbHookFn2 fn, const char* what) {
 }
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {
-    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.1.0", "",
-    "Decides how copies of the same item are ordered in the inventory and equipment menus."};
+    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.2.0", "",
+    "Orders copies of the same weapon by their gem loadout in the inventory and equipment menus."};
 
 BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
-    {BB_OPT_CHOICE | BB_OPT_LIVE, "ties", "Order of identical items",
-     "game: as the game does. reverse: flipped (a test that the plugin works).", "game", 0, 0, "game|reverse"},
-    {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log list entries", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
+    {BB_OPT_CHOICE | BB_OPT_LIVE, "ties", "Order of identical weapons",
+     "gems: grouped by gem loadout. game: as the game does. reverse: flipped (a test).", "gems", 0, 0,
+     "gems|game|reverse"},
+    {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
 
@@ -143,11 +203,10 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     out = fopen(path, "a");
     ties = parse_ties(api->config("inv_order.ties"));
     dump = strcmp(api->config("inv_order.dump"), "true") == 0;
-    if (out) fprintf(out, "== start: ties=%s dump=%d\n", ties == TIES_REVERSE ? "reverse" : "game", dump);
+    if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */
     if (place(FN_SORT_PASS, 20, on_sort_pass, "sort pass") != 0) return 1;
-    if (place(FN_SORT_KEY, 18, on_sort_key, "sort key") != 0) return 1;
     if (place(FN_SORT_A, 17, on_sort, "sort a") != 0) return 1;
     if (place(FN_SORT_B, 17, on_sort, "sort b") != 0) return 1;
     api->on_option("inv_order", on_option, NULL);

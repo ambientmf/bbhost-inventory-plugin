@@ -246,3 +246,46 @@ These are function entries, so bbhost's `hook2` can place them; prologues still 
 ### Corrections to earlier rounds
 
 - Round 1's "pool reuse reshuffles copies" and the stable-sort and heap-buffer guesses from the copy traces were wrong. The heap-to-heap copies were the list vector growing (`0x2065440`).
+
+## 2026-10-25 (round 6): GaItems and gems in memory
+
+Found with inv_order's dump option, checked against the Church Picks' known durability and gems.
+
+### Handle to GaItem (as `0x1e89070` does it)
+
+```c
+GaItemMan* man = *(GaItemMan**)0x593e990;    // global
+GaItem* item = *(GaItem**)(man + 8 + (handle & 0xffff) * 8);
+valid if item && item->handle == handle;     // handle at item+0x08
+```
+
+This only works for handles with bit `0x800000` set, which covers weapons (`0x808…`) and gems (`0xc08…`).
+
+### Weapon GaItem
+
+| offset | field |
+|---|---|
+| +0x08 | handle |
+| +0x0c | item id (30001000 = Church Pick) |
+| +0x18 | durability (248 / 244 / 247 matched the menu) |
+| +0x30 | 5 gem slots × 16 bytes: shape at +0x08 (1 radial, 2 triangle, 0x80000000 locked), gem handle at +0x0c (0 = empty) |
+
+### Gem GaItem
+
+| offset | field |
+|---|---|
+| +0x08 | handle |
+| +0x0c | gem item id |
+| +0x1c | shape |
+| +0x20 | up to 6 effect ids (0xffffffff = unused) |
+
+Two gems with identical effects can have different gem item ids (`0x1080140e` and `0x108012ed`, both with effects `0x1f9f0 0x42e0 0x85aa`), so compare gems by effects, not by id.
+
+### inv_order `ties = gems` (v0.2.0)
+
+For each record of a sort pass, the plugin:
+
+1. Builds a signature: the effect ids of slots 0-4 in order, with empty slots as `0xffffffff`.
+2. Ranks every record by (signature, handle) and writes the rank into `key2`.
+
+Copies with the same loadout end up next to each other in a fixed order. The handle only breaks ties between copies with exactly the same gems.
