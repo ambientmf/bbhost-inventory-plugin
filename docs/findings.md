@@ -297,3 +297,8 @@ Copies with the same loadout end up next to each other in a fixed order. The han
 - **`[T]` modes cycled, then F9 `ties = game`:** the handle order came back (248, 244, 247), live, without a reload.
 
 Next: a more meaningful default. Candidates are gem count first, then the weapon's attack rating, then user-defined effect-group priority.
+
+### v0.3.0: fully gemmed first, then gem count
+
+- **Tested 2026-10-25:** the Church Picks now read 248 (3/3), 247 (2/3), 244 (1/3), as designed.
+- **New +0 Church Pick:** its sort value (`key1`) is 4310000, against 4311000 for the +10s. The upgrade level is part of the game's own sort value, so the +0 never ties with the +10s. It sorts as its own group, ahead of them, which is the game's grouping (weapon + level + variant) working as intended.
