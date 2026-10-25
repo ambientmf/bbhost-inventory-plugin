@@ -12,6 +12,7 @@
  *                     primary kind, worst curse, flat secondaries,
  *                     strength, then the handle
  *   type_order, curse_order   the setup type and curse rankings
+ *   ignore_curses = true      skip the curse step: strongest first
  *          "game"     the game's order (lowest handle first)
  *          "reverse"  ties reversed - a visible check that the hooks work
  *   dump = true       log each sort pass's weapons and gems
@@ -102,6 +103,7 @@ static const int type_kinds[TYPE_COUNT][8] = {
     {-1},                             /* misc: anything else */
 };
 static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6}; /* configurable: type_order */
+static int ignore_curses; /* configurable: skip the curse step, so strength decides */
 
 static void classify(int kind, int* type, int* order_in_type) {
     for (int t = 0; t < TYPE_COUNT; ++t)
@@ -216,7 +218,7 @@ static int by_tie(const void* a, const void* b) {
     CMP(x->empty, y->empty);
     CMP(x->type, y->type);
     CMP(x->primary, y->primary);
-    CMP(x->curse, y->curse);
+    if (!ignore_curses) CMP(x->curse, y->curse);
     CMP(y->flats, x->flats); /* more first */
     for (int s = 0; s < NUM_SLOTS; ++s) CMP(y->strength[s], x->strength[s]); /* stronger first */
     for (int i = 0; i < SIG_LEN; ++i) CMP(x->sig[i], y->sig[i]);
@@ -387,6 +389,7 @@ static void on_option(const char* key, const char* value, void* user) {
     if (strcmp(key, "ties") == 0) ties = parse_ties(value);
     if (strcmp(key, "dump") == 0) dump = value && strcmp(value, "true") == 0;
     if (strcmp(key, "type_order") == 0) parse_type_order(value);
+    if (strcmp(key, "ignore_curses") == 0) ignore_curses = value && strcmp(value, "true") == 0;
     if (strcmp(key, "curse_order") == 0) parse_curse_order(value);
     if (strcmp(key, "export_gems") == 0) export_pending = value && strcmp(value, "true") == 0;
     if (out) fprintf(out, "option %s = %s\n", key, value ? value : "");
@@ -415,6 +418,8 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, best first",
      "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk",
      "stamina,kin,beasts,durability,hp,atk", 0, 0, 0},
+    {BB_OPT_BOOL | BB_OPT_LIVE, "ignore_curses", "Ignore curses",
+     "on: curses don't affect the order, so the strongest copy comes first", "false", 0, 0, 0},
     {BB_OPT_BOOL, "export_gems", "Export the gem effect table", "writes plugins/inv_order/gem_effects.csv once at start",
      "false", 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
@@ -430,6 +435,7 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     export_pending = strcmp(api->config("inv_order.export_gems"), "true") == 0;
     parse_type_order(api->config("inv_order.type_order"));
     parse_curse_order(api->config("inv_order.curse_order"));
+    ignore_curses = strcmp(api->config("inv_order.ignore_curses"), "true") == 0;
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */

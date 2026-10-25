@@ -5,7 +5,7 @@ Mirrors gem_tie()/by_tie() in plugin/inv_order.c, using the save's GaItem
 blocks (handle, item id, durability, ?, 1, then 5 x (slot shape, gem
 handle)) and gem records. Default type and curse order only.
 
-Usage: predict_order.py SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
+Usage: predict_order.py [--ignore-curses] SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
 """
 import collections
 import json
@@ -33,7 +33,8 @@ def classify(kind):
 
 
 def main():
-    path = sys.argv[1]
+    path = [a for a in sys.argv[1:] if not a.startswith("--")][0]
+    ignore_curses = "--ignore-curses" in sys.argv
     b = open(path, "rb").read()
     effects_json = json.load(open(os.environ["BB_UPGRADES_JSON"]))["gemEffects"]
     value = lambda e: round(abs(float(NUMBER.search(effects_json[str(e)]["effect"]).group())) * 100) if str(e) in effects_json else 0
@@ -82,7 +83,8 @@ def main():
                         flats += 1
                 desc.append(" + ".join(text(e) for e in fx))
             t, p = classify(gem_census.kind(defining[0])) if defining else (7, 99)
-            key = (not (open_ and gems == open_), 5 - gems, t, p, len(CURSES) - worst, -flats,
+            curse = 0 if ignore_curses else len(CURSES) - worst
+            key = (not (open_ and gems == open_), 5 - gems, t, p, curse, -flats,
                    [-x for x in strength], h)
             rows.append((key, h, dur, gems, open_, t, desc))
         rows.sort()

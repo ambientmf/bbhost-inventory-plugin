@@ -44,7 +44,7 @@ Default curse order, worst (lowest) to best:
 5. ATK vs the kin DOWN
 6. Stamina cost increase
 
-This should be configurable in the plugin, since it reflects one player's judgement. Implemented as `curse_order`, written **best first** to match the menu (top to bottom): default `stamina,kin,beasts,durability,hp,atk`. A weapon with a worse curse sits lower.
+This should be configurable in the plugin, since it reflects one player's judgement. Implemented as `curse_order`, written **best first** to match the menu (top to bottom): default `stamina,kin,beasts,durability,hp,atk`. A weapon with a worse curse sits lower. `ignore_curses = true` skips this step entirely, so strength decides (strongest first).
 
 ### 3b. Within a setup type: secondaries
 
