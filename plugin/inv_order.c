@@ -185,6 +185,51 @@ static int on_sort(BbHookCtx* ctx, void* user) {
     return 0; /* the game's sort runs, with our keys */
 }
 
+/* export_gems: write every GemeffectParam row to gem_effects.csv once the
+ * params have loaded, for working out effect categories and strengths
+ * offline (docs/sort-design.md). Rows are GEMEFFECT_PARAM_ST
+ * (include/bbhost/params.hpp). */
+static int export_pending;
+
+static void export_gem_table(void) {
+    size_t count = 0;
+    if (api->param_ids("GemeffectParam", NULL, 0, &count) != 0 || !count) return; /* not loaded yet */
+    export_pending = 0;
+    uint32_t* ids = (uint32_t*)malloc(count * sizeof(uint32_t));
+    if (!ids) return;
+    api->param_ids("GemeffectParam", ids, count, &count);
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/gem_effects.csv", api->plugin_dir("inv_order"));
+    FILE* f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "id,speffectId,categoryId,effectRank,rankMin,rankMax,disposalPrice,gemIconIdOffset,sortId,"
+                   "sortCategory,gemNameIdOffset,speffectId_forAtk\n");
+        for (size_t i = 0; i < count; ++i) {
+            size_t bytes = 0;
+            const uint8_t* row = (const uint8_t*)api->param_row("GemeffectParam", ids[i], &bytes);
+            if (!row || bytes < 36) continue;
+            int32_t v[6], atk;
+            uint16_t icon, sort;
+            uint32_t name;
+            memcpy(v, row, sizeof(v));
+            memcpy(&icon, row + 24, 2);
+            memcpy(&sort, row + 26, 2);
+            memcpy(&name, row + 28, 4);
+            memcpy(&atk, row + 32, 4);
+            fprintf(f, "%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%d\n", ids[i], v[0], v[1], v[2], v[3], v[4], v[5], icon,
+                    sort & 0x3fff, sort >> 14, name, atk);
+        }
+        fclose(f);
+    }
+    api->log("inv_order: exported %zu GemeffectParam rows to %s", count, path);
+    free(ids);
+}
+
+static void on_frame(void* user) {
+    (void)user;
+    if (export_pending) export_gem_table();
+}
+
 static int parse_ties(const char* v) {
     if (v && strcmp(v, "game") == 0) return TIES_GAME;
     if (v && strcmp(v, "reverse") == 0) return TIES_REVERSE;
@@ -195,6 +240,7 @@ static void on_option(const char* key, const char* value, void* user) {
     (void)user;
     if (strcmp(key, "ties") == 0) ties = parse_ties(value);
     if (strcmp(key, "dump") == 0) dump = value && strcmp(value, "true") == 0;
+    if (strcmp(key, "export_gems") == 0) export_pending = value && strcmp(value, "true") == 0;
     if (out) fprintf(out, "option %s = %s\n", key, value ? value : "");
 }
 
@@ -215,6 +261,8 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
      "gems|game|reverse"},
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
+    {BB_OPT_BOOL, "export_gems", "Export the gem effect table", "writes plugins/inv_order/gem_effects.csv once at start",
+     "false", 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
 
 BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
@@ -225,6 +273,7 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     out = fopen(path, "a");
     ties = parse_ties(api->config("inv_order.ties"));
     dump = strcmp(api->config("inv_order.dump"), "true") == 0;
+    export_pending = strcmp(api->config("inv_order.export_gems"), "true") == 0;
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */
@@ -232,6 +281,7 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     if (place(FN_SORT_A, 17, on_sort, NULL, "sort ascending") != 0) return 1;
     if (place(FN_SORT_B, 17, on_sort, (void*)1, "sort descending") != 0) return 1;
     api->on_option("inv_order", on_option, NULL);
+    api->on_frame(on_frame, NULL);
     if (out) fflush(out);
     return 0;
 }
