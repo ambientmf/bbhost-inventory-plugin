@@ -42,10 +42,7 @@ desktop.ini
 .vscode/
 *.Zone.Identifier
 
-# Screenshots (show character name)
-vlcsnap-*.png
 captures/
-screenshots/
 
 # Build output
 build/
