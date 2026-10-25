@@ -64,7 +64,7 @@ Identical setups fall back to a fixed, stable order (the handle, as now). The or
 ## Open questions
 
 - Which GemeffectParam fields identify an effect's kind (stat, conditional trigger, curse)? This needs a look at the paramdef.
-- How to classify a weapon whose gems span several types: by the slot-1 gem, by majority, or by the strongest primary?
+- ~~How to classify a weapon whose gems span several types?~~ **Decided (2026-10-25): slot 1 decides.** See "Setup type comes from slot 1" below.
 - Should "fully gemmed" also apply to left-hand weapons (pistols, single slot), or only within right-hand weapons for now?
 - Where blood setups and PvP status setups rank relative to physical and arcane by default.
 
@@ -89,3 +89,12 @@ Sources:
 2. Read the value from the game: `GemeffectParam.speffectId` → `SpEffectParam`. This is authoritative, but the field holding the value depends on the effect kind (37 kinds to map).
 
 Plan: (1) now, (2) later if the community table proves wrong anywhere.
+
+## Decision: setup type comes from slot 1
+
+A weapon's setup type is the type of the **gem in slot 1** (its first effect). Weapons that mix types are rare and niche anyway, so this rule should rarely surprise anyone.
+
+- **Why:** it's simple, visible, and the player controls it. Example: a Lost Chikage with two Physical ATK UP radials and one Blood ATK gem is a blood weapon if the Blood ATK gem sits in slot 1. Majority voting would bury a hard-farmed, out-of-shape Blood ATK radial under the physical gems. Players already think of slot 1 as the main gem.
+- **Slot 1 empty:** use the first filled slot.
+- **Slot 1's first effect fits no setup type** (e.g. a niche primary): type "misc", ranked after the main types.
+- **Strength within a type:** compare slot 1's primary value first, then the remaining slots in order. The defining gem counts most for strength as well.
