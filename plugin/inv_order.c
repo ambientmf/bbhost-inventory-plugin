@@ -91,18 +91,20 @@ static uint32_t effect_value(uint32_t id) {
 
 /* Setup types, in default order, and the primary kinds that make each one;
  * within a type, primaries sort in the order listed. */
-enum { TYPE_HEAVY, TYPE_PHYSICAL, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT };
-static const char* const type_names[TYPE_COUNT] = {"heavy", "physical", "arcane", "blood", "status", "special", "misc"};
+enum { TYPE_ADEPT, TYPE_HEAVY, TYPE_PHYSICAL, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT };
+static const char* const type_names[TYPE_COUNT] = {"adept",  "heavy",  "physical", "arcane",
+                                                   "blood", "status", "special",  "misc"};
 static const int type_kinds[TYPE_COUNT][8] = {
+    {21, 20, -1},                     /* adept: thrust % (Adept), blunt % (Striking) - per damage type */
     {29, 30, -1},                     /* heavy: STR / SKL scaling (Heavy / Sharp abyssal) */
-    {26, 27, 20, 21, 17, -1},         /* physical: phys %, ATK %, blunt %, thrust %, add physical */
+    {26, 27, 17, -1},                 /* physical: phys % (Tempering), ATK %, add physical */
     {32, 23, 24, 25, 14, 15, 16, -1}, /* arcane: ARC scaling, arcane / fire / bolt %, adds */
     {31, 22, 13, -1},                 /* blood: BT scaling, blood %, add blood */
     {38, 37, -1},                     /* status: rapid poison (Dirty), slow poison (Murky) */
     {43, 49, 52, 48, 51, -1},         /* special: Pulsing, Poorman's, Fool's */
     {-1},                             /* misc: anything else */
 };
-static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6}; /* configurable: type_order */
+static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7}; /* configurable: type_order */
 static int ignore_curses; /* configurable: skip the curse step, so strength decides */
 
 static void classify(int kind, int* type, int* order_in_type) {
@@ -266,7 +268,7 @@ static void dump_pass(const Record* r, size_t n) {
     fflush(out);
 }
 
-/* "heavy,physical,arcane,..." -> type_rank; unnamed types keep their order
+/* "adept,heavy,physical,..." -> type_rank; unnamed types keep their order
  * after the named ones. */
 static void parse_type_order(const char* v) {
     int next = 0, seen[TYPE_COUNT] = {0};
@@ -413,8 +415,8 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
     {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Setup type order",
-     "comma list of heavy, physical, arcane, blood, status, special, misc", "heavy,physical,arcane,blood,status,special,misc",
-     0, 0, 0},
+     "comma list of adept, heavy, physical, arcane, blood, status, special, misc",
+     "adept,heavy,physical,arcane,blood,status,special,misc", 0, 0, 0},
     {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, best first",
      "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk",
      "stamina,kin,beasts,durability,hp,atk", 0, 0, 0},

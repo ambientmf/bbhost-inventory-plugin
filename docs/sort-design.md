@@ -23,6 +23,7 @@ Within a group of identical weapons, cluster copies whose gems are the same *kin
 
 | Setup type | Defining gems (examples) |
 |---|---|
+| **Adept** (ranks first) | damage-type % gems: Thrust ATK UP (Adept), Blunt ATK UP (Striking). Hyper-optimized for the weapon's damage type, so they rank above Heavy and Tempering setups. |
 | **Heavy / strength** | Heavy Abyssal: STR scaling +65, plus tempering abyssal (Physical ATK UP ~24.8% + flat secondary like add physical ATK +15) |
 | **Pure physical** | all Physical ATK UP % (tempering, 25-27.2%) |
 | **Arcane / conversion** | Cold Abyssal: ARC scaling +65, plus flat secondaries (add fire / bolt / arcane ATK +15) |
