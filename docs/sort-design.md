@@ -67,3 +67,25 @@ Identical setups fall back to a fixed, stable order (the handle, as now). The or
 - How to classify a weapon whose gems span several types: by the slot-1 gem, by majority, or by the strongest primary?
 - Should "fully gemmed" also apply to left-hand weapons (pistols, single slot), or only within right-hand weapons for now?
 - Where blood setups and PvP status setups rank relative to physical and arcane by default.
+
+## Findings: classifying gem effects (2026-10-25)
+
+Sources:
+- The save editor's `resources/upgrades.json` (Noxde/Bloodborne-save-editor, GPL-3.0): 12,489 effects with name, effect text, rating and level.
+- The game's own `GemeffectParam`, exported by `inv_order` with `export_gems = true`: 16,101 rows.
+
+**Kind: solved.** `kind = (id / 1000) % 100`, with high-tier prefixes aliased: `{56:43, 62:17, 63:24, 64:25, 65-67:26, 68:29, 69:30, 70:33, 71:34, 72:35, 73:36, 74:37, 75:38, 76:49}`. This matches all 12,488 effects with zero mismatches. Every gem on userdata0001 (arcane, 64 gems) and userdata0002 (quality, 95 gems) classifies (`tools/gem_census.py`).
+
+**`GemeffectParam` fields:**
+
+| field | what it is | usable for strength? |
+|---|---|---|
+| `categoryId` | effect kind × tier blocks (e.g. Physical ATK UP = 167100-174600) | no; same information as the kind rule |
+| `sortId` | the game's own gem sort: a block per kind (Physical % = 1-200, blunt 401+, thrust 601+, …) | no; ~7% of adjacent pairs inverted overall, ~16% within an id family |
+| `effectRank` | a drop/quality rank | no; ~6% inverted overall, ~16% within a family |
+
+**Strength needs the real value.** Options:
+1. Embed an (effect id → value) table generated from `upgrades.json`. This is fast and GPL-compatible (the plugin is GPL anyway, as a bbhost plugin). Credit the source.
+2. Read the value from the game: `GemeffectParam.speffectId` → `SpEffectParam`. This is authoritative, but the field holding the value depends on the effect kind (37 kinds to map).
+
+Plan: (1) now, (2) later if the community table proves wrong anywhere.
