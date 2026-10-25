@@ -46,3 +46,6 @@ desktop.ini
 vlcsnap-*.png
 captures/
 screenshots/
+
+# Build output
+build/

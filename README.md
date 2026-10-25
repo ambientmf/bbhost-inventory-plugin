@@ -43,12 +43,26 @@ The plugin will:
 - Gem-loadout classification: decide what counts as a "group of gems" and build the sort key from it.
 - Optionally, upstream the option into bbhost's own PC Enhancements menu (`src/engine/option_menu.cpp`).
 
+## Building and installing
+
+```sh
+tools/build-plugin.sh            # needs clang + mingw-w64; uses /mnt/c/bb/bbhost-dev/include
+cp build/inv_order.dll <bbhost dir>/plugins/
+```
+
+Settings live under `[inv_order]` in `bbhost.toml`, or in the in-game plugin menu (F9):
+
+- `ties = "game" | "reverse"`: order of identical items. `reverse` is a test mode: identical weapons appear in the opposite order.
+- `dump = true`: logs list entries to `<data>/plugins/inv_order/inv_order.log`.
+
+Windows Smart App Control can block an unsigned DLL it hasn't seen before (bbhost logs `error 4551`).
+
 ## Repo layout
 
 ```
 docs/       research notes: findings, structures, offsets
 tools/      helper scripts (inv_dump.py: dump weapons, handles and gems from a save)
-patches/    reserved; the plugin source will likely replace this
+plugin/     the bbhost plugin (inv_order.c)
 ```
 
 ### tools/inv_dump.py
