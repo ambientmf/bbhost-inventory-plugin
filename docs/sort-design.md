@@ -46,6 +46,10 @@ Default curse order, worst (lowest) to best:
 
 This should be configurable in the plugin, since it reflects one player's judgement.
 
+### 3b. Within a setup type: secondaries
+
+For the abyssal classes (Heavy, Tempering, Cold), the **flat damage secondaries** (add physical / fire / bolt / arcane ATK +N) rank above niche secondaries such as stamina cost reduction or "ATK vs beasts UP 5%". The flat adds are what PvP builds actually use. This applies to ordering *within* a setup type, not to choosing the type.
+
 ### 4. Last resort
 
 Identical setups fall back to a fixed, stable order (the handle, as now). The order is then fully deterministic.
