@@ -7,7 +7,8 @@
  * then key2. key2 only matters when key1 ties: copies of the same weapon.
  * This plugin rewrites key2 just before the sort runs.
  *
- *   ties = "gems"     copies ordered by their gem loadout, then by handle
+ *   ties = "gems"     copies ordered fully gemmed first, then by gem count,
+ *                     then by gem loadout, then by handle
  *          "game"     the game's order (lowest handle first)
  *          "reverse"  ties reversed - a visible check that the hooks work
  *   dump = true       log each sort pass's weapons and gems
@@ -30,7 +31,9 @@
 #define GAITEM_HANDLE 0x08
 #define WEAPON_SLOTS 0x30   /* 5 gem slots, 16 bytes each */
 #define SLOT_STRIDE 0x10
+#define SLOT_SHAPE 0x08     /* within a slot: its shape, SLOT_LOCKED when the slot isn't open */
 #define SLOT_GEM 0x0c       /* within a slot: the gem's handle, 0 when empty */
+#define SLOT_LOCKED 0x80000000u
 #define GEM_EFFECTS 0x20    /* gem: up to 6 effect ids, 0xffffffff when unused */
 
 #define NUM_SLOTS 5
@@ -56,8 +59,11 @@ static int dump;
 static int armed;
 static uint64_t pass;
 
-/* One record's tie key in gems mode: its gem signature, then its handle. */
+/* One record's tie key in gems mode, compared field by field: fully gemmed
+ * first, then more gems first, then the gem signature, then the handle. */
 typedef struct Tie {
+    uint32_t not_full; /* 0 when every open slot holds a gem */
+    uint32_t empty;    /* NUM_SLOTS - gems: fewer empty slots first */
     uint32_t sig[SIG_LEN];
     uint32_t handle;
     uint32_t record;
@@ -78,24 +84,37 @@ static uint64_t gaitem(uint32_t handle) {
     return item;
 }
 
-/* A weapon's gem loadout as effect ids, slot by slot; an empty slot (or not
- * a weapon) reads as all 0xffffffff, which sorts after any gem. */
-static void gem_signature(uint32_t handle, uint32_t sig[SIG_LEN]) {
-    memset(sig, 0xff, SIG_LEN * sizeof(uint32_t));
+/* A weapon's gem loadout: how many open slots hold gems, and their effect
+ * ids slot by slot. An empty slot (or not a weapon) reads as all
+ * 0xffffffff, which sorts after any gem; a non-weapon counts as not full. */
+static void gem_signature(uint32_t handle, Tie* t) {
+    memset(t->sig, 0xff, sizeof(t->sig));
+    t->not_full = 1;
+    t->empty = NUM_SLOTS;
     if (handle >> 28 != 0x8) return; /* weapons only */
     const uint64_t weapon = gaitem(handle);
     if (!weapon) return;
+    uint32_t open = 0, gems = 0;
     for (int s = 0; s < NUM_SLOTS; ++s) {
-        uint32_t gem_handle = 0;
-        if (api->read(weapon + WEAPON_SLOTS + s * SLOT_STRIDE + SLOT_GEM, &gem_handle, 4) != 0) continue;
+        const uint64_t slot = weapon + WEAPON_SLOTS + s * SLOT_STRIDE;
+        uint32_t shape = SLOT_LOCKED, gem_handle = 0;
+        if (api->read(slot + SLOT_SHAPE, &shape, 4) != 0 || shape == SLOT_LOCKED) continue;
+        ++open;
+        if (api->read(slot + SLOT_GEM, &gem_handle, 4) != 0) continue;
         const uint64_t gem = gem_handle ? gaitem(gem_handle) : 0;
-        if (gem) api->read(gem + GEM_EFFECTS, &sig[s * NUM_EFFECTS], NUM_EFFECTS * sizeof(uint32_t));
+        if (!gem) continue;
+        ++gems;
+        api->read(gem + GEM_EFFECTS, &t->sig[s * NUM_EFFECTS], NUM_EFFECTS * sizeof(uint32_t));
     }
+    t->not_full = !(open && gems == open);
+    t->empty = NUM_SLOTS - gems;
 }
 
 static int by_tie(const void* a, const void* b) {
     const Tie* x = &tie[*(const uint32_t*)a];
     const Tie* y = &tie[*(const uint32_t*)b];
+    if (x->not_full != y->not_full) return x->not_full < y->not_full ? -1 : 1;
+    if (x->empty != y->empty) return x->empty < y->empty ? -1 : 1;
     for (int i = 0; i < SIG_LEN; ++i)
         if (x->sig[i] != y->sig[i]) return x->sig[i] < y->sig[i] ? -1 : 1;
     return x->handle < y->handle ? -1 : x->handle > y->handle;
@@ -108,7 +127,7 @@ static void rank_by_gems(Record* r, size_t n, int descending) {
     for (size_t i = 0; i < n; ++i) {
         tie[i].handle = r[i].key2;
         tie[i].record = (uint32_t)i;
-        gem_signature(r[i].key2, tie[i].sig);
+        gem_signature(r[i].key2, &tie[i]);
         order[i] = (uint32_t)i;
     }
     qsort(order, n, sizeof(order[0]), by_tie);
@@ -187,12 +206,12 @@ static int place(uint64_t at, size_t n, BbHookFn2 fn, void* user, const char* wh
 }
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {
-    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.2.0", "",
+    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.3.0", "",
     "Orders copies of the same weapon by their gem loadout in the inventory and equipment menus."};
 
 BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_CHOICE | BB_OPT_LIVE, "ties", "Order of identical weapons",
-     "gems: grouped by gem loadout. game: as the game does. reverse: flipped (a test).", "gems", 0, 0,
+     "gems: fully gemmed first, more gems first, then grouped by gems. game: as the game does. reverse: flipped (a test).", "gems", 0, 0,
      "gems|game|reverse"},
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
