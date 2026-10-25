@@ -52,7 +52,14 @@ cp build/inv_order.dll <bbhost dir>/plugins/
 
 Settings live under `[inv_order]` in `bbhost.toml`, or in the in-game plugin menu (F9):
 
-- `ties = "game" | "reverse"`: order of identical items. `reverse` is a test mode: identical weapons appear in the opposite order.
+- `ties = "gems" | "game" | "reverse"`: order of identical items. `gems` (the default) orders copies by their gem setup (see `docs/sort-design.md`). `game` keeps the game's order. `reverse` is a test mode: identical weapons appear in the opposite order.
+- `preset = "default" | "arcane" | "pulsing" | "custom"`: the order of setup types.
+  - `default`: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, special, misc.
+  - `arcane`: arcane, nourishing and blood first.
+  - `pulsing`: pulsing first.
+  - `custom`: uses `type_order`, a comma list of those names, top of the menu first. Types you leave out follow in default order.
+- `curse_order = "stamina,kin,beasts,durability,hp,atk"`: curses best first (top of the menu first). Curses you leave out follow in that default order.
+- `ignore_curses = true`: curses don't affect the order, so the strongest copy comes first.
 - `dump = true`: logs list entries to `<data>/plugins/inv_order/inv_order.log`.
 
 Windows Smart App Control can block an unsigned DLL it hasn't seen before (bbhost logs `error 4551`).

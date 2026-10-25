@@ -26,13 +26,17 @@ Within a group of identical weapons, cluster copies whose gems are the same *kin
 | **Adept** (ranks first) | damage-type % gems: Thrust ATK UP (Adept), Blunt ATK UP (Striking). Hyper-optimized for the weapon's damage type, so they rank above Heavy and Tempering setups. |
 | **Heavy / strength** | Heavy Abyssal: STR scaling +65, plus tempering abyssal (Physical ATK UP ~24.8% + flat secondary like add physical ATK +15) |
 | **Pure physical** | all Physical ATK UP % (tempering, 25-27.2%) |
+| **Nourishing** | ATK UP % (all damage). It boosts physical and the latent arcane of split-damage weapons (Blade of Mercy, Burial Blade, Holy Moonlight Sword, Boom Hammer). A red gem, like the physical types, so it sits with them, ahead of arcane. |
 | **Arcane / conversion** | Cold Abyssal: ARC scaling +65, plus flat secondaries (add fire / bolt / arcane ATK +15) |
 | **Blood** | Blood ATK UP % gems (can be out-of-shape, e.g. radial, for bloodtinge builds) |
-| **PvP status** | Dirty / Murky: fast poison / slow poison. Rank above the specialized classes below. |
-| **Specialized** | Poorman's (Physical ATK UP 30%+ at low HP), Fool's (Physical ATK UP at full HP), Pulsing (HP recovery over time) |
+| **Status** | Dirty / Murky: rapid poison / slow poison, the only two status effects, so they group together. Rank above the specialized classes below. |
+| **Pulsing** | HP recovery over time. Its own type so a preset can put it first. |
+| **Specialized** | Poorman's (Physical ATK UP 30%+ at low HP), Fool's (Physical ATK UP at full HP) |
 
 - Gem classes come with different natural curses, so grouping must use the **type of the primary effect**, not the full effect list or its values.
-- **Pulsing** is a matter of taste: some players want it at the top regardless of category, others at the bottom. Make it configurable later, after the core setup sorting works.
+- **Pulsing** is a matter of taste: some players want it at the top regardless of category, others at the bottom. The `pulsing` preset puts it first.
+- **Presets:** the F9 menu offers `default`, `arcane` (arcane, nourishing, blood first) and `pulsing`, plus `custom`, which reads the `type_order` list from `bbhost.toml`. Unknown or repeated names in a list are skipped and logged; unlisted types follow in default order. New presets come from what players ask for.
+- **Variants are separate groups.** A Lost or Uncanny copy has its own item id, so the game groups it apart from the normal copies (userdata0007: two Blades of Mercy, then the Lost Blade of Mercy below them).
 
 ### 3. Within a setup type: curses rank lower
 
@@ -67,7 +71,7 @@ Identical setups fall back to a fixed, stable order (the handle, as now). The or
 - Which GemeffectParam fields identify an effect's kind (stat, conditional trigger, curse)? This needs a look at the paramdef.
 - ~~How to classify a weapon whose gems span several types?~~ **Decided (2026-10-25): slot 1 decides.** See "Setup type comes from slot 1" below.
 - Should "fully gemmed" also apply to left-hand weapons (pistols, single slot), or only within right-hand weapons for now?
-- Where blood setups and PvP status setups rank relative to physical and arcane by default.
+- Where blood setups and status setups rank relative to physical and arcane by default.
 
 ## Findings: classifying gem effects (2026-10-25)
 

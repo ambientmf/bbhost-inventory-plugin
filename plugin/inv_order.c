@@ -21,6 +21,8 @@
  * 0x400000). */
 #include "bbhost_plugin.h"
 
+#include <ctype.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,20 +93,35 @@ static uint32_t effect_value(uint32_t id) {
 
 /* Setup types, in default order, and the primary kinds that make each one;
  * within a type, primaries sort in the order listed. */
-enum { TYPE_ADEPT, TYPE_HEAVY, TYPE_PHYSICAL, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT };
-static const char* const type_names[TYPE_COUNT] = {"adept",  "heavy",  "physical", "arcane",
-                                                   "blood", "status", "special",  "misc"};
+enum {
+    TYPE_ADEPT, TYPE_HEAVY, TYPE_PHYSICAL, TYPE_NOURISHING, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_PULSING,
+    TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT
+};
+static const char* const type_names[TYPE_COUNT] = {"adept", "heavy",  "physical", "nourishing", "arcane",
+                                                   "blood", "status", "pulsing",  "special",    "misc"};
 static const int type_kinds[TYPE_COUNT][8] = {
     {21, 20, -1},                     /* adept: thrust % (Adept), blunt % (Striking) - per damage type */
     {29, 30, -1},                     /* heavy: STR / SKL scaling (Heavy / Sharp abyssal) */
-    {26, 27, 17, -1},                 /* physical: phys % (Tempering), ATK %, add physical */
+    {26, 17, -1},                     /* physical: phys % (Tempering), add physical */
+    {27, -1},                         /* nourishing: ATK % (physical and arcane, for split-damage weapons) */
     {32, 23, 24, 25, 14, 15, 16, -1}, /* arcane: ARC scaling, arcane / fire / bolt %, adds */
     {31, 22, 13, -1},                 /* blood: BT scaling, blood %, add blood */
     {38, 37, -1},                     /* status: rapid poison (Dirty), slow poison (Murky) */
-    {43, 49, 52, 48, 51, -1},         /* special: Pulsing, Poorman's, Fool's */
+    {43, -1},                         /* pulsing: HP recovery */
+    {49, 52, 48, 51, -1},             /* special: Poorman's, Fool's */
     {-1},                             /* misc: anything else */
 };
-static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7}; /* configurable: type_order */
+static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}; /* configurable: preset, type_order */
+
+/* Setup order presets (the "preset" option); "custom" uses type_order. */
+static const char* const type_presets[][2] = {
+    {"default", "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,special,misc"},
+    {"arcane", "arcane,nourishing,blood,adept,heavy,physical,status,pulsing,special,misc"},
+    {"pulsing", "pulsing,adept,heavy,physical,nourishing,arcane,blood,status,special,misc"},
+};
+#define TYPE_PRESETS (sizeof(type_presets) / sizeof(type_presets[0]))
+static char preset[32] = "default";
+static char custom_types[512];
 static int ignore_curses; /* configurable: skip the curse step, so strength decides */
 
 static void classify(int kind, int* type, int* order_in_type) {
@@ -124,8 +141,8 @@ static void classify(int kind, int* type, int* order_in_type) {
  * curse ranks best. */
 #define CURSE_KINDS 6
 static int curse_kinds[CURSE_KINDS] = {28, 44, 47, 34, 36, 41}; /* ATK DOWN, HP drain, dur DOWN, beasts, kin, stamina */
-static const char* const curse_names[CURSE_KINDS] = {"atk", "hp", "durability", "beasts", "kin", "stamina"};
-static const int curse_name_kinds[CURSE_KINDS] = {28, 44, 47, 34, 36, 41};
+static const char* const curse_names[CURSE_KINDS] = {"stamina", "kin", "beasts", "durability", "hp", "atk"}; /* best first */
+static const int curse_name_kinds[CURSE_KINDS] = {41, 36, 34, 47, 44, 28};
 
 static int curse_rank(int kind) {
     for (int i = 0; i < CURSE_KINDS; ++i)
@@ -268,41 +285,80 @@ static void dump_pass(const Record* r, size_t n) {
     fflush(out);
 }
 
-/* "adept,heavy,physical,..." -> type_rank; unnamed types keep their order
- * after the named ones. */
-static void parse_type_order(const char* v) {
-    int next = 0, seen[TYPE_COUNT] = {0};
+/* To inv_order.log and the bbhost log, so a mistyped setting is visible. */
+static void warn(const char* fmt, ...) {
+    char msg[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    api->log("inv_order: %s", msg);
+    if (out) fprintf(out, "warning: %s\n", msg);
+}
+
+static int name_is(const char* p, size_t len, const char* name) {
+    if (strlen(name) != len) return 0;
+    for (size_t i = 0; i < len; ++i)
+        if (tolower((unsigned char)p[i]) != name[i]) return 0;
+    return 1;
+}
+
+/* A comma list of names (any case) -> order: the named ones first, as
+ * written, then the rest in the order of names. Unknown and repeated names
+ * are skipped with a warning. */
+static void parse_list(const char* what, const char* v, const char* const* names, int n, int* order) {
+    int count = 0, seen[TYPE_COUNT] = {0};
     for (const char* p = v ? v : ""; *p;) {
         while (*p == ',' || *p == ' ') ++p;
-        size_t len = strcspn(p, ", ");
-        for (int t = 0; t < TYPE_COUNT; ++t)
-            if (len && strlen(type_names[t]) == len && strncmp(p, type_names[t], len) == 0 && !seen[t]) {
-                type_rank[t] = next++;
-                seen[t] = 1;
-            }
+        const size_t len = strcspn(p, ", ");
+        if (!len) break;
+        int found = -1;
+        for (int i = 0; i < n; ++i)
+            if (name_is(p, len, names[i])) found = i;
+        if (found < 0 || seen[found])
+            warn("%s: ignoring %s name \"%.*s\"", what, found < 0 ? "unknown" : "repeated", (int)(len > 32 ? 32 : len), p);
+        else {
+            seen[found] = 1;
+            order[count++] = found;
+        }
         p += len;
     }
-    for (int t = 0; t < TYPE_COUNT; ++t)
-        if (!seen[t]) type_rank[t] = next++;
+    for (int i = 0; i < n; ++i)
+        if (!seen[i]) order[count++] = i;
+}
+
+/* preset, or type_order when it's "custom" -> type_rank. */
+static void apply_type_order(void) {
+    const char* list = NULL;
+    for (size_t i = 0; i < TYPE_PRESETS; ++i)
+        if (strcmp(preset, type_presets[i][0]) == 0) list = type_presets[i][1];
+    if (strcmp(preset, "custom") == 0) list = custom_types;
+    else if (!list) {
+        warn("preset: unknown \"%s\", using default", preset);
+        list = type_presets[0][1];
+    }
+    int order[TYPE_COUNT];
+    parse_list("type_order", list, type_names, TYPE_COUNT, order);
+    for (int i = 0; i < TYPE_COUNT; ++i) type_rank[order[i]] = i;
+}
+
+static void set_preset(const char* v) {
+    snprintf(preset, sizeof(preset), "%s", v && *v ? v : "default");
+    apply_type_order();
+}
+
+static void set_custom_types(const char* v) {
+    snprintf(custom_types, sizeof(custom_types), "%s", v ? v : "");
+    apply_type_order();
 }
 
 /* "stamina,kin,beasts,durability,hp,atk": best first, as the menu reads (a
- * weapon with a worse curse sits lower) -> curse_kinds, which is worst first. */
+ * weapon with a worse curse sits lower); unnamed curses follow in that
+ * default order -> curse_kinds, which is worst first. */
 static void parse_curse_order(const char* v) {
-    int kinds[CURSE_KINDS], n = 0;
-    for (const char* p = v ? v : ""; *p && n < CURSE_KINDS;) {
-        while (*p == ',' || *p == ' ') ++p;
-        size_t len = strcspn(p, ", ");
-        for (int c = 0; c < CURSE_KINDS; ++c)
-            if (len && strlen(curse_names[c]) == len && strncmp(p, curse_names[c], len) == 0) {
-                int dup = 0;
-                for (int i = 0; i < n; ++i) dup |= kinds[i] == curse_name_kinds[c];
-                if (!dup) kinds[n++] = curse_name_kinds[c];
-            }
-        p += len;
-    }
-    if (n != CURSE_KINDS) return; /* incomplete: keep the default */
-    for (int i = 0; i < CURSE_KINDS; ++i) curse_kinds[i] = kinds[CURSE_KINDS - 1 - i];
+    int order[CURSE_KINDS];
+    parse_list("curse_order", v, curse_names, CURSE_KINDS, order);
+    for (int i = 0; i < CURSE_KINDS; ++i) curse_kinds[CURSE_KINDS - 1 - i] = curse_name_kinds[order[i]];
 }
 
 static int on_sort_pass(BbHookCtx* ctx, void* user) {
@@ -390,7 +446,8 @@ static void on_option(const char* key, const char* value, void* user) {
     (void)user;
     if (strcmp(key, "ties") == 0) ties = parse_ties(value);
     if (strcmp(key, "dump") == 0) dump = value && strcmp(value, "true") == 0;
-    if (strcmp(key, "type_order") == 0) parse_type_order(value);
+    if (strcmp(key, "preset") == 0) set_preset(value);
+    if (strcmp(key, "type_order") == 0) set_custom_types(value);
     if (strcmp(key, "ignore_curses") == 0) ignore_curses = value && strcmp(value, "true") == 0;
     if (strcmp(key, "curse_order") == 0) parse_curse_order(value);
     if (strcmp(key, "export_gems") == 0) export_pending = value && strcmp(value, "true") == 0;
@@ -414,11 +471,16 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
      "gems|game|reverse"},
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
-    {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Setup type order",
-     "comma list of adept, heavy, physical, arcane, blood, status, special, misc",
-     "adept,heavy,physical,arcane,blood,status,special,misc", 0, 0, 0},
+    {BB_OPT_CHOICE | BB_OPT_LIVE, "preset", "Setup order",
+     "default: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, special. arcane: arcane, "
+     "nourishing and blood first. pulsing: pulsing first. custom: the list below.",
+     "default", 0, 0, "default|arcane|pulsing|custom"},
+    {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Custom setup order",
+     "used when Setup order is custom; top first: comma list of adept, heavy, physical, nourishing, arcane, blood, "
+     "status, pulsing, special, misc. Unlisted types follow.",
+     "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,special,misc", 0, 0, 0},
     {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, best first",
-     "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk",
+     "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk. Unlisted curses follow.",
      "stamina,kin,beasts,durability,hp,atk", 0, 0, 0},
     {BB_OPT_BOOL | BB_OPT_LIVE, "ignore_curses", "Ignore curses",
      "on: curses don't affect the order, so the strongest copy comes first", "false", 0, 0, 0},
@@ -435,7 +497,8 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     ties = parse_ties(api->config("inv_order.ties"));
     dump = strcmp(api->config("inv_order.dump"), "true") == 0;
     export_pending = strcmp(api->config("inv_order.export_gems"), "true") == 0;
-    parse_type_order(api->config("inv_order.type_order"));
+    snprintf(custom_types, sizeof(custom_types), "%s", api->config("inv_order.type_order"));
+    set_preset(api->config("inv_order.preset"));
     parse_curse_order(api->config("inv_order.curse_order"));
     ignore_curses = strcmp(api->config("inv_order.ignore_curses"), "true") == 0;
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
