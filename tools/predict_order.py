@@ -5,7 +5,7 @@ Mirrors gem_tie()/by_tie() in plugin/inv_order.c, using the save's GaItem
 blocks (handle, item id, durability, ?, 1, then 5 x (slot shape, gem
 handle)) and gem records. Default type and curse order only.
 
-Usage: predict_order.py [--ignore-curses] [--ignore-variants] SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
+Usage: predict_order.py [--ignore-curses] [--ignore-variants] [--type-order=LIST] [--curse-order=LIST] SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
 """
 import collections
 import json
@@ -24,6 +24,8 @@ TYPE_KINDS = [[21, 20], [29, 30], [26, 17], [27], [32, 23, 24, 25, 14, 15, 16], 
 TYPE_NAMES = ["adept", "heavy", "physical", "nourishing", "arcane", "blood", "status", "pulsing", "poormans", "fools", "misc"]
 MISC = len(TYPE_KINDS)
 CURSES = [28, 44, 47, 34, 36, 41]  # worst first
+CURSE_NAMES = ["stamina", "kin", "beasts", "durability", "hp", "atk"]  # best first
+CURSE_NAME_KINDS = [41, 36, 34, 47, 44, 28]
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
 
@@ -34,8 +36,32 @@ def classify(kind):
     return MISC, 99 if kind < 0 else kind
 
 
+def parse_list(what, value, names):
+    """Like parse_list() in inv_order.c: named first, as written; the rest follow."""
+    order = []
+    for word in re.split(r"[, ]+", value):
+        if not word:
+            continue
+        if word.lower() not in names or names.index(word.lower()) in order:
+            print(f"warning: {what}: ignoring {'repeated' if word.lower() in names else 'unknown'} name {word!r}")
+        else:
+            order.append(names.index(word.lower()))
+    return order + [i for i in range(len(names)) if i not in order]
+
+
+def option(name):
+    return next((a.split("=", 1)[1] for a in sys.argv if a.startswith(f"--{name}=")), None)
+
+
 def main():
+    global CURSES
     path = [a for a in sys.argv[1:] if not a.startswith("--")][0]
+    type_rank = list(range(len(TYPE_NAMES) + 1))
+    if option("type-order") is not None:
+        for rank, t in enumerate(parse_list("type_order", option("type-order"), TYPE_NAMES)):
+            type_rank[t] = rank
+    if option("curse-order") is not None:
+        CURSES = [CURSE_NAME_KINDS[i] for i in reversed(parse_list("curse_order", option("curse-order"), CURSE_NAMES))]
     ignore_curses = "--ignore-curses" in sys.argv
     ignore_variants = "--ignore-variants" in sys.argv
     b = open(path, "rb").read()
@@ -88,7 +114,7 @@ def main():
                 desc.append(" + ".join(text(e) for e in fx))
             t, p = classify(gem_census.kind(defining[0])) if defining else (MISC + 1, 99)
             curse = 0 if ignore_curses else len(CURSES) - worst
-            key = (not (open_ and gems == open_), 5 - gems, t, p, curse, -flats,
+            key = (not (open_ and gems == open_), 5 - gems, type_rank[t], p, curse, -flats,
                    [-x for x in strength], h)
             rows.append((key, h, dur, gems, open_, t, desc, item_id))
         rows.sort()

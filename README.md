@@ -2,6 +2,12 @@
 
 A [bbhost](https://github.com/droogie/bbhost) plugin for Bloodborne on PC that gives copies of the same weapon a **predictable order in the inventory and equipment menus**, based on their blood gem loadout.
 
+![Saw Cleavers and Saifs, normal and Uncanny copies ordered by gems](screenshots/readme/merged-variants.png)
+
+The plugin's settings in bbhost's in-game plugin menu (F9):
+
+![Inventory order settings in the F9 menu](screenshots/readme/plugin-settings.png)
+
 ## The problem
 
 At meta level (BL120, everything +10) you carry several copies of the same weapon with different gem loadouts. They show up in an order that changes over time, so you have to inspect gems to find the one you want.
