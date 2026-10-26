@@ -8,7 +8,7 @@ Out of the box, the game orders identical weapons by an internal id that can cha
 
 ## Install
 
-1. Download `inv_order.dll` from the [Releases](https://gitlab.com/ambientmf/bbhost-inventory-mod/-/releases) page.
+1. Download `inv_order.dll` from the [Releases](https://github.com/ambientmf/bbhost-inventory-plugin/releases) page.
 2. Put it in the `plugins` folder next to the bbhost executable (`<bbhost folder>\plugins\`).
 3. Start bbhost. The plugin is on by default.
 
