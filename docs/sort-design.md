@@ -15,7 +15,7 @@ Status: **goal / aspirational**. v1 (`ties = gems`) orders by raw effect ids, wh
 Weapons with every slot filled come before weapons with empty slots (0-2 of 3 filled).
 
 - "Full" is relative to the weapon's own slot count. Some parry tools (pistols and the like) have a single slot. Most of this targets right-hand weapons, but the rule must not punish weapons with fewer slots.
-- Slot count comes from the weapon GaItem (locked slots have shape `0x80000000`).
+- Slot count comes from the weapon's GaItem (locked slots are marked).
 
 ### 2. Group by setup type
 
@@ -62,7 +62,7 @@ Identical setups fall back to a fixed, stable order (the handle, as now). The or
 
 ## Implementation notes
 
-- **Effect data is available.** Each gem's effect ids are read already (gem GaItem +0x20). Effect ids are rows of `GemeffectParam`. bbhost exposes those rows by field name (`param_get("GemeffectParam", id, field, …)`), so effect type, stat and magnitude can be read from the game's own data rather than hard-coded.
+- **Effect data is available.** Each gem's effect ids are read already, from the gem's GaItem. Effect ids are rows of `GemeffectParam`. bbhost exposes those rows by field name (`param_get("GemeffectParam", id, field, …)`), so effect type, stat and magnitude can be read from the game's own data rather than hard-coded.
 - **Classification:** map each effect id to a category (scaling, physical %, flat add, blood %, status, conditional, curse:<kind>) using GemeffectParam fields. Hard-code only what the param data can't express, such as Poorman's vs Fool's conditions.
 - **Ranking:** build a multi-part key per weapon: (fully gemmed, setup type rank, curse score, …, handle). Rank the records by it and write the rank into `key2`. This is the same mechanism as v1, so no new hooks are needed.
 - **Configuration:** setup-type order, curse order and Pulsing placement as plugin options (F9 menu or `bbhost.toml`). The Elden Ring-style manual ordering, chosen in the game's own menu, is a separate, later goal.

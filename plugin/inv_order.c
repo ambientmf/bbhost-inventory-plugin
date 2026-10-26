@@ -1,9 +1,9 @@
 /* inv_order: a bbhost plugin that decides how identical items are ordered in
  * the inventory and equipment menus.
  *
- * The menu's sort pass (0x2060530, see docs/findings.md) builds one record
+ * The menu's sort pass (FN_SORT_PASS, see docs/findings.md) builds one record
  * per list entry - {key1 = the sort column's value, key2 = the item's GaItem
- * handle, index} - and stable-sorts them (0x2064dd0 / 0x2064ff0) by key1,
+ * handle, index} - and stable-sorts them (FN_SORT_A / FN_SORT_B) by key1,
  * then key2. key2 only matters when key1 ties: copies of the same weapon.
  * This plugin rewrites key2 just before the sort runs.
  *
@@ -180,7 +180,7 @@ typedef struct Tie {
 static Tie tie[MAX_RECORDS];
 static uint32_t order[MAX_RECORDS];
 
-/* The GaItem a handle names, as the game resolves it (0x1e89070): slot =
+/* The GaItem a handle names, as the game resolves it: slot =
  * the handle's low 16 bits, and the item must carry the same handle. */
 static uint64_t gaitem(uint32_t handle) {
     uint64_t man = 0, item = 0;
