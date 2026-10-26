@@ -49,7 +49,20 @@ The plugin will:
 - Gem-loadout classification: decide what counts as a "group of gems" and build the sort key from it.
 - Optionally, upstream the option into bbhost's own PC Enhancements menu (`src/engine/option_menu.cpp`).
 
-## Building and installing
+## Installing
+
+1. Put `inv_order.dll` in the `plugins` folder next to the bbhost executable (`<bbhost folder>\plugins\`).
+2. Start bbhost. The plugin is on by default. Turn it off in the launcher's Plugins tab, in game with F9, or with `inv_order = false` under `[plugins]` in `bbhost.toml`.
+3. Open the inventory or equipment menu: copies of the same weapon are now ordered by their gems. The settings below are in F9 and apply at once.
+
+Requirements and caveats:
+
+- Bloodborne 1.09 (the plugin doesn't load on any other eboot) and bbhost with plugin API 9 or newer. Tested with bbhost v0.2.19.
+- The DLL is unsigned, so bbhost shows it as "not signed". It loads unless `signed_only = true` is set under `[plugins]`.
+- Windows Smart App Control can block an unsigned DLL it hasn't seen before (bbhost logs `error 4551`).
+- It only changes menu order, not gameplay, so it isn't flagged as a gameplay plugin online.
+
+## Building
 
 ```sh
 tools/build-plugin.sh            # needs clang + mingw-w64; uses /mnt/c/bb/bbhost-dev/include
@@ -90,10 +103,14 @@ The save layout comes from [Noxde/Bloodborne-save-editor](https://github.com/Nox
 
 ## Not in this repo
 
-Game files, the executable, saves, screenshots and RE databases are **gitignored** and must never be committed. Bring your own legally dumped copy of the game.
+Game files, the executable, saves and RE databases are **gitignored** and must never be committed. Bring your own legally dumped copy of the game.
 
 ## Target
 
 - Game: Bloodborne 1.09 (the eboot SHA-256 that bbhost enforces)
 - Runtime: bbhost on Windows 11
 - Tools: x64dbg, Ghidra or Binary Ninja (bbhost addresses use base `0x400000`), a C/C++ toolchain, ImHex
+
+## License
+
+GPL-3.0-or-later (see `LICENSE`), as bbhost requires of plugins built against its API. `plugin/gem_values.h` is generated from [Noxde/Bloodborne-save-editor](https://github.com/Noxde/Bloodborne-save-editor)'s `upgrades.json` (GPL-3.0). If you pass the DLL on, pass on the source too (this repository, or a copy of it).

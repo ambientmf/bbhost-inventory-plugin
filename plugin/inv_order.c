@@ -11,14 +11,23 @@
  *                     fully gemmed, gem count, setup type of slot 1,
  *                     primary kind, worst curse, flat secondaries,
  *                     strength, then the handle
- *   type_order, curse_order   the setup type and curse rankings
+ *   preset, type_order, curse_order   the setup type and curse rankings
  *   ignore_curses = true      skip the curse step: strongest first
+ *   ignore_variants = true    normal, Uncanny and Lost copies sort together
  *          "game"     the game's order (lowest handle first)
  *          "reverse"  ties reversed - a visible check that the hooks work
  *   dump = true       log each sort pass's weapons and gems
  *
  * All addresses are Binary Ninja addresses of the 1.09 eboot (image base
- * 0x400000). */
+ * 0x400000).
+ *
+ * Copyright (C) 2026 ambientmf
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version. This program is distributed WITHOUT ANY WARRANTY; see
+ * the GNU General Public License (LICENSE) for details. */
 #include "bbhost_plugin.h"
 
 #include <ctype.h>
@@ -492,7 +501,7 @@ static int place(uint64_t at, size_t n, BbHookFn2 fn, void* user, const char* wh
 }
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {
-    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.4.0", "",
+    BB_PLUGIN_API_VERSION, 0, "inv_order", "Inventory order", "0.1.0", "ambientmf",
     "Orders copies of the same weapon by their gem loadout in the inventory and equipment menus."};
 
 BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
