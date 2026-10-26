@@ -5,7 +5,7 @@ Mirrors gem_tie()/by_tie() in plugin/inv_order.c, using the save's GaItem
 blocks (handle, item id, durability, ?, 1, then 5 x (slot shape, gem
 handle)) and gem records. Default type and curse order only.
 
-Usage: predict_order.py [--ignore-curses] SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
+Usage: predict_order.py [--ignore-curses] [--ignore-variants] SAVE   (BB_UPGRADES_JSON / BB_WEAPONS_JSON for names)
 """
 import collections
 import json
@@ -20,8 +20,8 @@ import inv_dump  # noqa: E402
 
 LOCKED = 0x80000000
 TYPE_KINDS = [[21, 20], [29, 30], [26, 17], [27], [32, 23, 24, 25, 14, 15, 16], [31, 22, 13], [38, 37], [43],
-              [49, 52, 48, 51]]
-TYPE_NAMES = ["adept", "heavy", "physical", "nourishing", "arcane", "blood", "status", "pulsing", "special", "misc"]
+              [49, 52], [48, 51]]
+TYPE_NAMES = ["adept", "heavy", "physical", "nourishing", "arcane", "blood", "status", "pulsing", "poormans", "fools", "misc"]
 MISC = len(TYPE_KINDS)
 CURSES = [28, 44, 47, 34, 36, 41]  # worst first
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
@@ -37,6 +37,7 @@ def classify(kind):
 def main():
     path = [a for a in sys.argv[1:] if not a.startswith("--")][0]
     ignore_curses = "--ignore-curses" in sys.argv
+    ignore_variants = "--ignore-variants" in sys.argv
     b = open(path, "rb").read()
     effects_json = json.load(open(os.environ["BB_UPGRADES_JSON"]))["gemEffects"]
     value = lambda e: round(abs(float(NUMBER.search(effects_json[str(e)]["effect"]).group())) * 100) if str(e) in effects_json else 0
@@ -55,13 +56,14 @@ def main():
     groups = collections.defaultdict(list)
     for n, o, idx, h, item, amount, key in inv_dump.entries(b, inv):
         if h in ga and item != 1000000:
-            groups[item].append(h)
+            variant = item // 10000 % 10
+            groups[item - variant * 10000 if ignore_variants and variant in (1, 2) else item].append(h)
     for item, handles in sorted(groups.items()):
         if len(handles) < 2:
             continue
         rows = []
         for h in handles:
-            _, dur, slots = ga[h]
+            item_id, dur, slots = ga[h]
             open_ = gems = flats = 0
             worst = len(CURSES)
             defining = None
@@ -88,11 +90,12 @@ def main():
             curse = 0 if ignore_curses else len(CURSES) - worst
             key = (not (open_ and gems == open_), 5 - gems, t, p, curse, -flats,
                    [-x for x in strength], h)
-            rows.append((key, h, dur, gems, open_, t, desc))
+            rows.append((key, h, dur, gems, open_, t, desc, item_id))
         rows.sort()
         print(f"== {item} {inv_dump.name_of(names, item)!r}: {len(rows)} copies, predicted order:")
-        for rank, (key, h, dur, gems, open_, t, desc) in enumerate(rows, 1):
-            print(f"  {rank}. handle {h:08x} dur {dur} gems {gems}/{open_} type {TYPE_NAMES[t] if t <= MISC else '-'}")
+        for rank, (key, h, dur, gems, open_, t, desc, item_id) in enumerate(rows, 1):
+            print(f"  {rank}. handle {h:08x} {inv_dump.name_of(names, item_id)!r} dur {dur} gems {gems}/{open_}"
+                  f" type {TYPE_NAMES[t] if t <= MISC else '-'}")
             for d in desc:
                 print(f"       {d}")
 

@@ -37,6 +37,7 @@
 
 /* GaItem layouts (docs/findings.md, round 6). */
 #define GAITEM_HANDLE 0x08
+#define GAITEM_ITEM 0x0c    /* item id: weapon x 1000000 (+ 10000 Uncanny, 20000 Lost) + level x 100 */
 #define WEAPON_SLOTS 0x30   /* 5 gem slots, 16 bytes each */
 #define SLOT_STRIDE 0x10
 #define SLOT_SHAPE 0x08     /* within a slot: its shape, SLOT_LOCKED when the slot isn't open */
@@ -95,10 +96,10 @@ static uint32_t effect_value(uint32_t id) {
  * within a type, primaries sort in the order listed. */
 enum {
     TYPE_ADEPT, TYPE_HEAVY, TYPE_PHYSICAL, TYPE_NOURISHING, TYPE_ARCANE, TYPE_BLOOD, TYPE_STATUS, TYPE_PULSING,
-    TYPE_SPECIAL, TYPE_MISC, TYPE_COUNT
+    TYPE_POORMANS, TYPE_FOOLS, TYPE_MISC, TYPE_COUNT
 };
-static const char* const type_names[TYPE_COUNT] = {"adept", "heavy",  "physical", "nourishing", "arcane",
-                                                   "blood", "status", "pulsing",  "special",    "misc"};
+static const char* const type_names[TYPE_COUNT] = {"adept",  "heavy",   "physical", "nourishing", "arcane", "blood",
+                                                   "status", "pulsing", "poormans", "fools",      "misc"};
 static const int type_kinds[TYPE_COUNT][8] = {
     {21, 20, -1},                     /* adept: thrust % (Adept), blunt % (Striking) - per damage type */
     {29, 30, -1},                     /* heavy: STR / SKL scaling (Heavy / Sharp abyssal) */
@@ -108,21 +109,23 @@ static const int type_kinds[TYPE_COUNT][8] = {
     {31, 22, 13, -1},                 /* blood: BT scaling, blood %, add blood */
     {38, 37, -1},                     /* status: rapid poison (Dirty), slow poison (Murky) */
     {43, -1},                         /* pulsing: HP recovery */
-    {49, 52, 48, 51, -1},             /* special: Poorman's, Fool's */
+    {49, 52, -1},                     /* poormans: phys / ATK UP near death (Poorman's) */
+    {48, 51, -1},                     /* fools: phys / ATK UP at full HP (Fool's) */
     {-1},                             /* misc: anything else */
 };
-static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}; /* configurable: preset, type_order */
+static int type_rank[TYPE_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}; /* configurable: preset, type_order */
 
 /* Setup order presets (the "preset" option); "custom" uses type_order. */
 static const char* const type_presets[][2] = {
-    {"default", "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,special,misc"},
-    {"arcane", "arcane,nourishing,blood,adept,heavy,physical,status,pulsing,special,misc"},
-    {"pulsing+default", "pulsing,adept,heavy,physical,nourishing,arcane,blood,status,special,misc"},
+    {"default", "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,poormans,fools,misc"},
+    {"arcane", "arcane,nourishing,blood,adept,heavy,physical,status,pulsing,poormans,fools,misc"},
+    {"pulsing+default", "pulsing,adept,heavy,physical,nourishing,arcane,blood,status,poormans,fools,misc"},
 };
 #define TYPE_PRESETS (sizeof(type_presets) / sizeof(type_presets[0]))
 static char preset[32] = "default";
 static char custom_types[512];
 static int ignore_curses; /* configurable: skip the curse step, so strength decides */
+static int ignore_variants; /* configurable: normal, Uncanny and Lost copies sort as one group */
 
 static void classify(int kind, int* type, int* order_in_type) {
     for (int t = 0; t < TYPE_COUNT; ++t)
@@ -262,6 +265,31 @@ static void rank_by_gems(Record* r, size_t n, int descending) {
         r[order[rank]].key2 = (uint32_t)(descending ? n - 1 - rank : rank);
 }
 
+/* A weapon's item id with the variant taken out (Uncanny and Lost -> normal;
+ * the level stays), or 0 for a non-weapon. */
+static uint32_t base_item(uint32_t handle) {
+    uint32_t id = 0;
+    const uint64_t item = handle >> 28 == 0x8 ? gaitem(handle) : 0;
+    if (!item || api->read(item + GAITEM_ITEM, &id, 4) != 0) return 0;
+    const uint32_t variant = id / 10000 % 10;
+    return variant == 1 || variant == 2 ? id - variant * 10000 : id;
+}
+
+/* ignore_variants: give every copy of a weapon at one level, whatever its
+ * variant, the key1 of the copy that sorts first, so they tie and the gems
+ * order them. Runs before rank_by_gems (key2 still holds the handles). */
+static void merge_variants(Record* r, size_t n, int descending) {
+    static uint32_t base[MAX_RECORDS];
+    for (size_t i = 0; i < n; ++i) base[i] = base_item(r[i].key2);
+    for (size_t i = 0; i < n; ++i) {
+        if (!base[i]) continue;
+        int32_t key = r[i].key1;
+        for (size_t j = 0; j < n; ++j)
+            if (base[j] == base[i] && (descending ? r[j].key1 > key : r[j].key1 < key)) key = r[j].key1;
+        r[i].key1 = key;
+    }
+}
+
 static void dump_pass(const Record* r, size_t n) {
     fprintf(out, "== pass %llu: %zu records, ties=%d\n", (unsigned long long)pass, n, ties);
     for (size_t i = 0; i < n; ++i) {
@@ -379,6 +407,7 @@ static int on_sort(BbHookCtx* ctx, void* user) {
     const size_t n = (size_t)(last - first);
     switch (ties) {
     case TIES_GEMS:
+        if (ignore_variants) merge_variants(first, n, descending);
         rank_by_gems(first, n, descending);
         break;
     case TIES_REVERSE:
@@ -449,6 +478,7 @@ static void on_option(const char* key, const char* value, void* user) {
     if (strcmp(key, "preset") == 0) set_preset(value);
     if (strcmp(key, "type_order") == 0) set_custom_types(value);
     if (strcmp(key, "ignore_curses") == 0) ignore_curses = value && strcmp(value, "true") == 0;
+    if (strcmp(key, "ignore_variants") == 0) ignore_variants = value && strcmp(value, "true") == 0;
     if (strcmp(key, "curse_order") == 0) parse_curse_order(value);
     if (strcmp(key, "export_gems") == 0) export_pending = value && strcmp(value, "true") == 0;
     if (out) fprintf(out, "option %s = %s\n", key, value ? value : "");
@@ -472,18 +502,21 @@ BB_PLUGIN_EXPORT const BbOption bb_plugin_options[] = {
     {BB_OPT_BOOL | BB_OPT_LIVE, "dump", "Log sort passes", "writes plugins/inv_order/inv_order.log", "false", 0, 0,
      0},
     {BB_OPT_CHOICE | BB_OPT_LIVE, "preset", "Setup order",
-     "default: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, special. arcane: arcane, "
+     "default: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, poormans, fools. arcane: arcane, "
      "nourishing and blood first. pulsing+default: pulsing first, then default. custom: the list below.",
      "default", 0, 0, "default|arcane|pulsing+default|custom"},
     {BB_OPT_TEXT | BB_OPT_LIVE, "type_order", "Custom setup order",
      "used when Setup order is custom; top first: comma list of adept, heavy, physical, nourishing, arcane, blood, "
-     "status, pulsing, special, misc. Unlisted types follow.",
-     "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,special,misc", 0, 0, 0},
+     "status, pulsing, poormans, fools, misc. Unlisted types follow.",
+     "adept,heavy,physical,nourishing,arcane,blood,status,pulsing,poormans,fools,misc", 0, 0, 0},
     {BB_OPT_TEXT | BB_OPT_LIVE, "curse_order", "Curse order, best first",
      "top of the menu first: comma list of stamina, kin, beasts, durability, hp, atk. Unlisted curses follow.",
      "stamina,kin,beasts,durability,hp,atk", 0, 0, 0},
     {BB_OPT_BOOL | BB_OPT_LIVE, "ignore_curses", "Ignore curses",
      "on: curses don't affect the order, so the strongest copy comes first", "false", 0, 0, 0},
+    {BB_OPT_BOOL | BB_OPT_LIVE, "ignore_variants", "Ignore variants",
+     "on: normal, Uncanny and Lost copies at the same level sort together, by gems, at the place of the first",
+     "false", 0, 0, 0},
     {BB_OPT_BOOL, "export_gems", "Export the gem effect table", "writes plugins/inv_order/gem_effects.csv once at start",
      "false", 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}};
@@ -501,6 +534,7 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi* host) {
     set_preset(api->config("inv_order.preset"));
     parse_curse_order(api->config("inv_order.curse_order"));
     ignore_curses = strcmp(api->config("inv_order.ignore_curses"), "true") == 0;
+    ignore_variants = strcmp(api->config("inv_order.ignore_variants"), "true") == 0;
     if (out) fprintf(out, "== start: ties=%d dump=%d\n", ties, dump);
     /* Prologue lengths: whole instructions, none rip-relative (checked against
      * the 1.09 eboot). */

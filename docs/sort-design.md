@@ -29,14 +29,15 @@ Within a group of identical weapons, cluster copies whose gems are the same *kin
 | **Nourishing** | ATK UP % (all damage). It boosts physical and the latent arcane of split-damage weapons (Blade of Mercy, Burial Blade, Holy Moonlight Sword, Boom Hammer). A red gem, like the physical types, so it sits with them, ahead of arcane. |
 | **Arcane / conversion** | Cold Abyssal: ARC scaling +65, plus flat secondaries (add fire / bolt / arcane ATK +15) |
 | **Blood** | Blood ATK UP % gems (can be out-of-shape, e.g. radial, for bloodtinge builds) |
-| **Status** | Dirty / Murky: rapid poison / slow poison, the only two status effects, so they group together. Rank above the specialized classes below. |
+| **Status** | Dirty / Murky: rapid poison / slow poison, the only two status effects, so they group together. Rank above the conditional classes below. |
 | **Pulsing** | HP recovery over time. Its own type so a preset can put it first. |
-| **Specialized** | Poorman's (Physical ATK UP 30%+ at low HP), Fool's (Physical ATK UP at full HP) |
+| **Poorman's** | Physical / ATK UP near death (30%+ at low HP). Its own type, so PvE players can place it apart from Fool's. |
+| **Fool's** | Physical / ATK UP at full HP. Its own type. |
 
 - Gem classes come with different natural curses, so grouping must use the **type of the primary effect**, not the full effect list or its values.
 - **Pulsing** is a matter of taste: some players want it at the top regardless of category, others at the bottom. The `pulsing+default` preset puts it first.
 - **Presets:** the F9 menu offers `default`, `arcane` (arcane, nourishing, blood first) and `pulsing+default`, plus `custom`, which reads the `type_order` list from `bbhost.toml`. Unknown or repeated names in a list are skipped and logged; unlisted types follow in default order. New presets come from what players ask for.
-- **Variants are separate groups.** A Lost or Uncanny copy has its own item id, so the game groups it apart from the normal copies (userdata0007: two Blades of Mercy, then the Lost Blade of Mercy below them).
+- **Variants are separate groups.** A Lost or Uncanny copy has its own item id, so the game groups it apart from the normal copies (userdata0007: two Blades of Mercy, then the Lost Blade of Mercy below them). `ignore_variants = true` merges them: every copy at the same level takes the `key1` of the copy that sorts first, so the gems order all of them. The variant is the item id's 10000s digit (0 normal, 1 Uncanny, 2 Lost); the two "Bloody" weapons (digit 8) are left alone. Upgrade level still separates groups.
 
 ### 3. Within a setup type: curses rank lower
 
@@ -103,3 +104,9 @@ A weapon's setup type is the type of the **gem in slot 1** (its first effect). W
 - **Slot 1 empty:** use the first filled slot.
 - **Slot 1's first effect fits no setup type** (e.g. a niche primary): type "misc", ranked after the main types.
 - **Strength within a type:** compare slot 1's primary value first, then the remaining slots in order. The defining gem counts most for strength as well.
+
+## Decision: presets stay in the plugin menu
+
+Presets are chosen in the bbhost plugin menu (F9) or `bbhost.toml`, not in the game's own [T] sort cycle. They're global, not per character: a preset reflects how a player likes the menu, and the gems still decide each copy's place, so a global setting covers most players. A player with a build-specific preference switches the preset in F9; it applies live.
+
+Adding modes to the game's [T] cycle would need its mode storage, cycle limit and labels found and patched, and the game may save the mode per character. That groundwork belongs with the Elden Ring-style manual sort, later.

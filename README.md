@@ -54,12 +54,13 @@ Settings live under `[inv_order]` in `bbhost.toml`, or in the in-game plugin men
 
 - `ties = "gems" | "game" | "reverse"`: order of identical items. `gems` (the default) orders copies by their gem setup (see `docs/sort-design.md`). `game` keeps the game's order. `reverse` is a test mode: identical weapons appear in the opposite order.
 - `preset = "default" | "arcane" | "pulsing+default" | "custom"`: the order of setup types.
-  - `default`: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, special, misc.
+  - `default`: adept, heavy, physical, nourishing, arcane, blood, status, pulsing, poormans, fools, misc.
   - `arcane`: arcane, nourishing and blood first.
   - `pulsing+default`: pulsing first, then the default order.
   - `custom`: uses `type_order`, a comma list of those names, top of the menu first. Types you leave out follow in default order.
 - `curse_order = "stamina,kin,beasts,durability,hp,atk"`: curses best first (top of the menu first). Curses you leave out follow in that default order.
 - `ignore_curses = true`: curses don't affect the order, so the strongest copy comes first.
+- `ignore_variants = true`: normal, Uncanny and Lost copies of a weapon at the same level sort as one group (by gems), at the position of whichever copy the game sorts first. Off by default, because it overrides the game's own grouping.
 - `dump = true`: logs list entries to `<data>/plugins/inv_order/inv_order.log`.
 
 Windows Smart App Control can block an unsigned DLL it hasn't seen before (bbhost logs `error 4551`).
